@@ -16,6 +16,8 @@ export const manifestSchema = z.object({
   devDependencies: z.record(z.string(), z.string()).optional(),
   optionalDependencies: z.record(z.string(), z.string()).optional(),
   peerDependencies: z.record(z.string(), z.string()).optional(),
+  overrides: z.record(z.string(), z.unknown()).optional(),
+  pnpm: z.object({ overrides: z.record(z.string(), z.unknown()).optional() }).optional(),
 });
 
 type Manifest = z.infer<typeof manifestSchema>;

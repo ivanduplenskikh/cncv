@@ -75,13 +75,65 @@ const packumentSchema = z.object({
   'dist-tags': z.record(z.string(), z.string()).default({}),
 });
 
+interface OverrideRule {
+  id: number;
+  name: string;
+  selector: string | undefined;
+  value: string | undefined;
+  children: OverrideRule[];
+}
+
+function overrideRules(manifest: z.infer<typeof manifestSchema>): OverrideRule[] {
+  if (manifest.overrides !== undefined && manifest.pnpm?.overrides !== undefined) {
+    throw new Error('Registry estimates cannot combine npm and pnpm overrides. Provide an npm lockfile.');
+  }
+  let nextId = 0;
+  const parse = (entries: Record<string, unknown>): OverrideRule[] => Object.entries(entries).map(([key, entry]) => {
+    const match = /^((?:@[^/]+\/)?[^/@\s>]+)(?:@(.+))?$/.exec(key);
+    const name = match?.[1];
+    const selector = match?.[2];
+    if (name === undefined || name.includes('\\') || name.includes('\0')
+      || (selector !== undefined && semver.validRange(selector) === null)) {
+      throw new Error(`Unsupported override selector: ${key}. Provide an npm lockfile.`);
+    }
+    const object = typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      ? entry as Record<string, unknown> : undefined;
+    if (manifest.pnpm?.overrides !== undefined && typeof entry !== 'string') {
+      throw new Error(`Unsupported pnpm override: ${key}. Only flat version overrides are supported.`);
+    }
+    let value = object === undefined ? entry : object['.'];
+    if ((object === undefined || value !== undefined) && typeof value !== 'string') {
+      throw new Error(`Invalid override value: ${key}.`);
+    }
+    if (typeof value === 'string' && value.startsWith('$')) {
+      const reference = value.slice(1);
+      value = manifest.dependencies?.[reference] ?? manifest.devDependencies?.[reference]
+        ?? manifest.optionalDependencies?.[reference] ?? manifest.peerDependencies?.[reference];
+      if (value === undefined) {
+        throw new Error(`Unknown override dependency reference: ${reference}.`);
+      }
+    }
+    const id = nextId++;
+
+    return {
+      id,
+      name,
+      selector,
+      value: typeof value === 'string' ? value : undefined,
+      children: object === undefined ? [] : parse(Object.fromEntries(Object.entries(object).filter(([child]) => child !== '.'))),
+    };
+  });
+
+  return parse(manifest.overrides ?? manifest.pnpm?.overrides ?? {});
+}
+
 async function materializeRegistry(
   manifest: z.infer<typeof manifestSchema>, directory: string, request: FetchJson, options: CheckOptions,
 ): Promise<Map<string, string>> {
   const metadata = new Map<string, z.infer<typeof packumentSchema>>();
   const packages = new Map<string, string>();
   const origins = new Map<string, string>();
-  const queue = [{ manifest, directory, root: true }];
+  const queue = [{ manifest, directory, root: true, rules: overrideRules(manifest) }];
   for (const current of queue) {
     for (const [name, kind] of dependencyEntries(current.manifest, current.root && options.omitDev === false)) {
       if (!/^(?:@[^/\\.][^/\\]*\/)?[^/\\.][^/\\]*$/.test(name) || name.includes('\0')) {
@@ -94,7 +146,11 @@ async function materializeRegistry(
         optional: current.manifest.optionalDependencies,
         peer: current.manifest.peerDependencies,
       };
-      const range = groups[kind]?.[name];
+      const requested = groups[kind]?.[name];
+      const rule = current.rules.find((candidate) => candidate.name === name && (candidate.selector === undefined
+        || (requested !== undefined && semver.validRange(requested) !== null && semver.intersects(candidate.selector, requested))));
+      const range = rule?.value ?? requested;
+      const rules = [...new Map([...(rule?.children ?? []), ...current.rules].map((candidate) => [candidate.id, candidate])).values()];
       if (range === undefined || /^(?:file:|link:|workspace:|npm:|git|https?:|github:)/i.test(range)) {
         throw new Error(`Unsupported remote dependency: ${name}@${range ?? '(missing range)'}. Only public npm semver ranges and tags are supported without a lockfile.`);
       }
@@ -113,7 +169,7 @@ async function materializeRegistry(
       if (version === null || version === undefined) {
         throw new Error(`No public npm version satisfies ${name}@${range}.`);
       }
-      const key = `${name}@${version}`;
+      const key = `${name}@${version}\0${rules.map((candidate) => candidate.id).join(',')}`;
       let target = packages.get(key);
       if (target === undefined) {
         if (packages.size >= 500) {
@@ -121,14 +177,14 @@ async function materializeRegistry(
         }
         const dependency = manifestSchema.parse(packument.versions[version]);
         if (dependency.version !== version) {
-          throw new Error(`Registry version mismatch: ${key}`);
+          throw new Error(`Registry version mismatch: ${name}@${version}`);
         }
         target = path.join(directory, '.cncv-registry', String(packages.size));
         await writeManifest(target, { ...dependency, name });
         packages.set(key, target);
         origins.set(target, `${registryUrl}/${encodeURIComponent(version)}`);
         if (options.direct !== true) {
-          queue.push({ manifest: dependency, directory: target, root: false });
+          queue.push({ manifest: dependency, directory: target, root: false, rules });
         }
       }
       const link = path.join(current.directory, 'node_modules', name);
@@ -179,7 +235,7 @@ export async function inspectRemoteProject(
         : origins.get(path.dirname(row.path)) ?? `${lockUrl.href}#${encodeURIComponent(location)}`;
     }
     report.source = lock === null
-      ? 'ESTIMATE: No sibling npm package-lock.json. Versions resolved from current public npm metadata, not the repository installed tree. Overrides and other lockfile formats are not applied.'
+      ? 'ESTIMATE: No sibling npm package-lock.json. Versions resolved from current public npm metadata with root npm or flat pnpm overrides, not the repository installed tree. Yarn resolutions and other lockfile formats are not applied.'
       : `Remote npm lockfile v${String(lock.lockfileVersion)}: ${lockUrl.href}. Versions are locked; engine declarations come from the lockfile.`;
 
     return report;

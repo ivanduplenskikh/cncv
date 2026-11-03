@@ -1,0 +1,52 @@
+{
+  "name": "@ivanduplenskikh/cncv",
+  "version": "1.0.0",
+  "description": "Check installed packages for declared Node.js engine compatibility.",
+  "type": "module",
+  "packageManager": "pnpm@10.20.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ivanduplenskikh/cncv.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "bin": {
+    "cncv": "dist/src/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/check.d.ts",
+      "import": "./dist/src/check.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "oxlint --threads 1 --max-warnings 0 .",
+    "test": "pnpm build && node --test dist/test/*.test.js",
+    "check": "pnpm lint && pnpm test",
+    "start": "node dist/src/cli.js",
+    "prepack": "pnpm check"
+  },
+  "dependencies": {
+    "cli-table3": "^0.6.5",
+    "open": "^10.2.0",
+    "semver": "^7.7.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@stylistic/eslint-plugin": "^5.0.0",
+    "@types/node": "^22.19.0",
+    "@types/semver": "^7.7.1",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "oxlint": "^1.91.0",
+    "oxlint-tsgolint": "^7.0.2005",
+    "typescript": "~6.0.3"
+  }
+}

@@ -74,7 +74,9 @@ Remote checks download metadata only: no cloning, package tarballs, installation
 
 ## Report Output
 
-Each check prints the terminal table and opens a standalone HTML report in your default browser. Reports are saved in a private `cncv-report-*` directory under the operating system's temporary directory; the CLI prints the file URL. The HTML has no external assets, scripts, or network requests. It includes summary counts, package locations, sorted results, and dependency-tracing notes. Compatible packages remain hidden.
+Each check prints the terminal table and opens a live HTML report in your default browser. The CLI starts a server on `127.0.0.1` with an available port and a private, randomly generated report URL. Every page load or browser refresh reruns the local or remote inspection, using the original flags and Node/npm target versions. Keep the CLI running while using the live report; Ctrl+C stops the server. Remote refreshes download fresh metadata and may take longer. Failed refreshes show an escaped error page instead of stale results; a later refresh retries the check. Terminal output and the process exit code reflect the initial check.
+
+A standalone snapshot of the initial report is also saved in a private `cncv-report-*` directory under the operating system's temporary directory; the CLI prints both URLs. The snapshot does not regenerate on load. Neither HTML version uses external assets or browser scripts. Reports include summary counts, package locations, sorted results, and dependency-tracing notes. Compatible packages remain hidden. The live server serves only its report route, not arbitrary project or filesystem files.
 
 Both reports show **Minimum Node.js (engines.node)** and **Minimum npm (engines.npm)** above the package results, including when all compatible rows are hidden. Each is the smallest semver satisfying all valid declarations from the checked dependencies, respecting alternatives and upper bounds. The project's current engine entry is excluded: these are dependency-based candidates, not proof that the project's own code supports an older runtime. Selection respects `--direct` and `--include-dev`; remote registry results remain estimates.
 
@@ -86,7 +88,7 @@ For terminal-only use, including CI and headless environments:
 pnpm start /path/to/project --node 22.14.0 --no-open
 ```
 
-`--no-open` skips both HTML generation and browser launch. If browser launch reports an error, the saved report location is still printed and compatibility exit codes are preserved. Temporary reports remain available until removed manually or cleaned by the operating system.
+`--no-open` skips HTML generation, browser launch, and the report server, so the CLI exits after the terminal check. If browser launch reports an error, the server is stopped, the saved snapshot location is still printed, and compatibility exit codes are preserved. Temporary snapshots remain available until removed manually or cleaned by the operating system.
 
 To make the command available globally after building:
 

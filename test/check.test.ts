@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { TestContext } from 'node:test';
@@ -10,7 +11,7 @@ import { stripVTControlCharacters } from 'node:util';
 
 import type { PackageRow, Report } from '../src/check.js';
 import { inspectProject, minimumEngines, renderReport } from '../src/check.js';
-import { openHtmlReport, renderHtmlReport } from '../src/html.js';
+import { openHtmlReport, renderHtmlReport, startHtmlReportServer } from '../src/html.js';
 
 const cli = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const cliArgs = [cli, '--no-open'];
@@ -465,6 +466,85 @@ await test('missing npm declarations do not change node results and invalid npm 
   });
   assert.equal(explicitNpm.status, 0, explicitNpm.stderr);
   assert.match(explicitNpm.stdout, /npm target: 10.9.2/);
+});
+
+await test('HTML page loads regenerate the report from current dependency metadata', async (context) => {
+  const directory = await fixture(context, { dependencies: { child: '*' }, engines: { node: '>=20' } });
+  const child = path.join(directory, 'node_modules/child');
+  await writePackage(child, { name: 'child', version: '1.0.0', engines: { node: '>=22' } });
+  const server = await startHtmlReportServer(directory, () => inspectProject(directory, {
+    nodeVersion: '20.0.0', npmVersion: '10.0.0',
+  }));
+  context.after(server.close);
+  const first = await fetch(server.url);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get('cache-control'), 'no-store');
+  assert.match(await first.text(), /1.0.0/);
+  await writePackage(child, { name: 'child', version: '2.0.0', engines: { node: '>=10' } });
+  const second = await fetch(server.url);
+  assert.match(await second.text(), /All checked packages are compatible/);
+  assert.equal((await fetch(new URL('/package.json', server.url))).status, 404);
+  assert.equal((await fetch(server.url, { method: 'POST' })).status, 405);
+  const invalidHostStatus = await new Promise<number | undefined>((resolve, reject) => {
+    httpRequest(server.url, { headers: { host: 'example.com' } }, (response) => {
+      response.resume();
+      resolve(response.statusCode);
+    }).on('error', reject).end();
+  });
+  assert.equal(invalidHostStatus, 404);
+});
+
+await test('HTML regeneration errors are escaped and a later page load can recover', async (context) => {
+  let attempts = 0;
+  const server = await startHtmlReportServer('/project', () => {
+    attempts++;
+    if (attempts === 1) {
+      return Promise.reject(new Error('<script>broken</script>'));
+    }
+
+    return Promise.resolve({ nodeVersion: '22.14.0', rows: [], exitCode: 0 });
+  });
+  context.after(server.close);
+  const head = await fetch(server.url, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(attempts, 0);
+  const failed = await fetch(server.url);
+  assert.equal(failed.status, 500);
+  const html = await failed.text();
+  assert.match(html, /&lt;script&gt;broken&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  const recovered = await fetch(server.url);
+  assert.equal(recovered.status, 200);
+  assert.match(await recovered.text(), /All checked packages are compatible/);
+});
+
+await test('HTML opener launches the live URL and closes the server on launch failure', async (context) => {
+  const report: Report = { nodeVersion: '22.14.0', rows: [], exitCode: 0 };
+  let launchUrl = '';
+  const launch = async (url: string): Promise<void> => {
+    launchUrl = url;
+    assert.match(url, /^http:\/\/127\.0\.0\.1:/);
+    assert.equal((await fetch(url)).status, 200);
+  };
+  const result = await openHtmlReport(report, '/project', launch, () => Promise.resolve(report));
+  context.after(async () => {
+    await result.close?.();
+    await rm(path.dirname(result.filePath), { recursive: true, force: true });
+  });
+  assert.equal(result.url, launchUrl);
+  assert.equal(result.warning, undefined);
+  assert.match(await readFile(result.filePath, 'utf8'), /Node.js Compatibility/);
+  const failed = await openHtmlReport(report, '/project', (url) => {
+    launchUrl = url;
+
+    return Promise.reject(new Error('No desktop browser'));
+  }, () => Promise.resolve(report));
+  context.after(async () => {
+    await rm(path.dirname(failed.filePath), { recursive: true, force: true });
+  });
+  assert.equal(failed.url, undefined);
+  assert.match(failed.warning ?? '', /No desktop browser/);
+  await assert.rejects(fetch(launchUrl));
 });
 
 await test('HTML report is written before launching and remains available if browser launch fails', async (context) => {

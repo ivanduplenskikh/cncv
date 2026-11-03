@@ -1,4 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -107,19 +110,91 @@ async function launchBrowser(filePath: string): Promise<void> {
   await open(filePath);
 }
 
+export async function startHtmlReportServer(
+  projectPath: string,
+  regenerate: () => Promise<Report>,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const route = `/${randomUUID()}/report.html`;
+  let host = '';
+  const respond = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (request.headers.host !== host || request.url !== route) {
+      response.writeHead(404).end('Not found');
+
+      return;
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.setHeader('Allow', 'GET, HEAD');
+      response.writeHead(405).end('Method not allowed');
+
+      return;
+    }
+    if (request.method === 'HEAD') {
+      response.writeHead(200).end();
+
+      return;
+    }
+    try {
+      response.end(renderHtmlReport(await regenerate(), projectPath));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected error';
+      response.writeHead(500).end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'"><title>cncv | Check failed</title></head><body><h1>Check failed</h1><p>${escapeHtml(message)}</p></body></html>`);
+    }
+  };
+  const server = createServer((request, response) => {
+    void respond(request, response);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    server.close();
+    throw new Error('Cannot determine HTML report server address.');
+  }
+  host = `127.0.0.1:${String(address.port)}`;
+
+  return {
+    url: `http://${host}${route}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error === undefined) {
+          resolve();
+        } else {
+          reject(error);
+        }
+      });
+      server.closeIdleConnections();
+    }),
+  };
+}
+
 export async function openHtmlReport(
   report: Report,
   projectPath: string,
   launch: (filePath: string) => Promise<void> = launchBrowser,
-): Promise<{ filePath: string; warning?: string }> {
+  regenerate?: () => Promise<Report>,
+): Promise<{ filePath: string; url?: string; close?: () => Promise<void>; warning?: string }> {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'cncv-report-'));
   const filePath = path.join(directory, 'report.html');
   await writeFile(filePath, renderHtmlReport(report, projectPath), { encoding: 'utf8', mode: 0o600 });
+  let live: Awaited<ReturnType<typeof startHtmlReportServer>> | undefined;
   try {
-    await launch(filePath);
+    if (regenerate !== undefined) {
+      live = await startHtmlReportServer(projectPath, regenerate);
+    }
+    await launch(live?.url ?? filePath);
 
-    return { filePath };
+    return { filePath, ...live };
   } catch (error) {
+    await live?.close();
+
     return { filePath, warning: `Could not open browser: ${error instanceof Error ? error.message : 'Unknown error'}` };
   }
 }

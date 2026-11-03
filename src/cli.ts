@@ -20,7 +20,7 @@ Options:
   --direct          Only check the project and direct dependencies
   --omit-dev        Exclude the project's devDependencies (default)
   --include-dev     Include the project's devDependencies
-  --no-open         Terminal output only; do not generate or open HTML
+  --no-open         Terminal only; do not generate HTML or start a server
   --help, -h        Show help
 
 Exit codes: 0 = no declared incompatibilities, 1 = incompatible,
@@ -28,6 +28,7 @@ Exit codes: 0 = no declared incompatibilities, 1 = incompatible,
 Packages without engines.node are traced through installed dependencies.
 An incompatible descendant makes them BLOCKED; otherwise they remain UNKNOWN.
 Dependency checks do not confirm the package's own runtime compatibility.
+HTML reloads rerun the check. Keep the CLI running; Ctrl+C stops the server.
 `;
 
 try {
@@ -68,8 +69,18 @@ try {
     }));
     process.exitCode = report.exitCode;
     if (values['no-open'] !== true) {
-      const html = await openHtmlReport(report, remote ? input : path.resolve(input));
-      console.log(`HTML report: ${pathToFileURL(html.filePath).href}`);
+      const projectPath = remote ? input : path.resolve(input);
+      const refreshOptions: CheckOptions = { ...options, nodeVersion: report.nodeVersion };
+      if (report.npmVersion !== undefined) {
+        refreshOptions.npmVersion = report.npmVersion;
+      }
+      const html = await openHtmlReport(report, projectPath, undefined, () => remote
+        ? inspectRemoteProject(input, refreshOptions) : inspectProject(projectPath, refreshOptions));
+      console.log(`HTML report: ${html.url ?? pathToFileURL(html.filePath).href}`);
+      if (html.url !== undefined) {
+        console.log('Each page load reruns the check. Keep cncv running; Ctrl+C stops the report server.');
+        console.log(`HTML snapshot: ${pathToFileURL(html.filePath).href}`);
+      }
       if (html.warning !== undefined) {
         console.error(`cncv: ${html.warning}`);
       }

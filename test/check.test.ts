@@ -547,6 +547,77 @@ await test('HTML opener launches the live URL and closes the server on launch fa
   await assert.rejects(fetch(launchUrl));
 });
 
+await test('HTML report names persist per project path and safely include the project name', async (context) => {
+  const directory = await fixture(context, { name: '@scope/my-project', engines: { node: '>=20' } });
+  const report = await inspectProject(directory, { nodeVersion: '22.14.0', npmVersion: '10.0.0' });
+  const launch = (): Promise<void> => Promise.resolve();
+  const first = await openHtmlReport(report, directory, launch);
+  context.after(async () => {
+    await rm(path.dirname(first.filePath), { recursive: true, force: true });
+  });
+  const second = await openHtmlReport({ ...report, nodeVersion: '24.0.0' }, path.join(directory, 'package.json'), launch);
+  assert.equal(first.filePath, second.filePath);
+  assert.equal(path.basename(first.filePath), 'scope-my-project.html');
+  assert.match(path.basename(path.dirname(first.filePath)), /^scope-my-project-[a-f0-9]{16}$/);
+  assert.match(await readFile(first.filePath, 'utf8'), /<title>cncv \| @scope\/my-project \| Node.js 24.0.0<\/title>/);
+  const otherDirectory = await fixture(context, { name: '@scope/my-project' });
+  const other = await openHtmlReport(report, otherDirectory, launch);
+  context.after(async () => {
+    await rm(path.dirname(other.filePath), { recursive: true, force: true });
+  });
+  assert.notEqual(other.filePath, first.filePath);
+  const server = await startHtmlReportServer(directory, () => Promise.resolve(report), report);
+  context.after(server.close);
+  const nextServer = await startHtmlReportServer(directory, () => Promise.resolve(report), report);
+  context.after(nextServer.close);
+  const firstUrl = new URL(server.url);
+  const nextUrl = new URL(nextServer.url);
+  const uuidRoute = /^\/[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\/scope-my-project\.html$/;
+  assert.match(firstUrl.pathname, uuidRoute);
+  assert.match(nextUrl.pathname, uuidRoute);
+  assert.notEqual(firstUrl.pathname, nextUrl.pathname);
+  assert.equal((await fetch(new URL(nextUrl.pathname, firstUrl))).status, 404);
+  assert.equal((await fetch(firstUrl)).status, 200);
+});
+
+await test('HTML names fall back to the check path and normalize equivalent remote URLs', async (context) => {
+  const launch = (): Promise<void> => Promise.resolve();
+  const report: Report = { nodeVersion: '22.14.0', rows: [], exitCode: 0 };
+  const directory = await fixture(context, {});
+  const local = await openHtmlReport(report, directory, launch);
+  context.after(async () => {
+    await rm(path.dirname(local.filePath), { recursive: true, force: true });
+  });
+  assert.equal(path.basename(local.filePath), `${path.basename(directory).toLowerCase()}.html`);
+  const blob = 'https://github.com/owner/repository/blob/main/packages/my-package/package.json';
+  const raw = 'https://raw.githubusercontent.com/owner/repository/main/packages/my-package/package.json';
+  const first = await openHtmlReport(report, blob, launch);
+  const second = await openHtmlReport(report, `${raw}?test=1#fragment`, launch);
+  context.after(async () => {
+    await rm(path.dirname(first.filePath), { recursive: true, force: true });
+  });
+  assert.equal(first.filePath, second.filePath);
+  assert.equal(path.basename(first.filePath), 'my-package.html');
+  assert.match(await readFile(first.filePath, 'utf8'), /<title>cncv \| my-package \|/);
+  for (const name of ['CON', '../../<script>alert(1)</script>']) {
+    const named: Report = {
+      ...report,
+      rows: [{
+        name, kind: 'project', version: '1.0.0', engine: '>=20', status: 'OK', path: directory,
+      }],
+    };
+    const result = await openHtmlReport(named, directory, launch);
+    context.after(async () => {
+      await rm(path.dirname(result.filePath), { recursive: true, force: true });
+    });
+    assert.match(path.basename(result.filePath), /^[a-z0-9-]+\.html$/);
+    assert.doesNotMatch(await readFile(result.filePath, 'utf8'), /<script>/);
+    if (name === 'CON') {
+      assert.equal(path.basename(result.filePath), 'project-con.html');
+    }
+  }
+});
+
 await test('HTML report is written before launching and remains available if browser launch fails', async (context) => {
   const report: Report = { nodeVersion: '22.14.0', rows: [], exitCode: 0 };
   let launched = false;

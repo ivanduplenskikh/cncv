@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import os from 'node:os';
@@ -9,13 +9,34 @@ import open from 'open';
 
 import type { Report } from './check.js';
 import { minimumEngines, visibleReportRows } from './check.js';
+import { remoteManifestUrl } from './remote.js';
 
 function escapeHtml(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
 
+function reportIdentity(projectPath: string, report?: Report): { name: string; slug: string; id: string } {
+  const remote = /^https?:\/\//i.test(projectPath);
+  let target = remote ? remoteManifestUrl(projectPath).href : path.resolve(projectPath);
+  if (!remote && path.basename(target) === 'package.json') {
+    target = path.dirname(target);
+  }
+  const parts = remote ? new URL(target).pathname.split('/').filter(Boolean) : [];
+  const fallback = remote ? (parts.length === 4 ? parts[1] : parts.at(-2)) : path.basename(target);
+  const rootName = report?.rows.find((row) => row.kind === 'project')?.name;
+  const name = rootName !== undefined && rootName !== '(project)' && rootName.trim() !== ''
+    ? rootName : fallback || 'project';
+  const sanitized = name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').slice(0, 80).replace(/^-+|-+$/g, '') || 'project';
+  const slug = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(sanitized) ? `project-${sanitized}` : sanitized;
+  const key = !remote && process.platform === 'win32' ? target.toLowerCase() : target;
+  const id = createHash('sha256').update(key).digest('hex').slice(0, 16);
+
+  return { name, slug, id };
+}
+
 export function renderHtmlReport(report: Report, projectPath: string): string {
+  const { name } = reportIdentity(projectPath, report);
   const rows = visibleReportRows(report);
   const compatible = report.rows.filter((row) => row.status === 'OK').length;
   const failures = report.rows.filter((row) => row.status === 'INCOMPATIBLE' || row.status === 'BLOCKED').length;
@@ -46,7 +67,7 @@ export function renderHtmlReport(report: Report, projectPath: string): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-  <title>cncv | Node.js ${escapeHtml(report.nodeVersion)}</title>
+  <title>cncv | ${escapeHtml(name)} | Node.js ${escapeHtml(report.nodeVersion)}</title>
   <style>
     :root { color-scheme: light; --ink: #202820; --muted: #59645d; --line: #dce3dd; --red: #ab2626; --green: #23734a; --amber: #805c0c; }
     * { box-sizing: border-box; }
@@ -113,8 +134,9 @@ async function launchBrowser(filePath: string): Promise<void> {
 export async function startHtmlReportServer(
   projectPath: string,
   regenerate: () => Promise<Report>,
+  report?: Report,
 ): Promise<{ url: string; close: () => Promise<void> }> {
-  const route = `/${randomUUID()}/report.html`;
+  const route = `/${randomUUID()}/${reportIdentity(projectPath, report).slug}.html`;
   let host = '';
   const respond = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     response.setHeader('Cache-Control', 'no-store');
@@ -181,13 +203,15 @@ export async function openHtmlReport(
   launch: (filePath: string) => Promise<void> = launchBrowser,
   regenerate?: () => Promise<Report>,
 ): Promise<{ filePath: string; url?: string; close?: () => Promise<void>; warning?: string }> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'cncv-report-'));
-  const filePath = path.join(directory, 'report.html');
+  const { slug, id } = reportIdentity(projectPath, report);
+  const directory = path.join(os.homedir(), '.cncv', 'reports', `${slug}-${id}`);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const filePath = path.join(directory, `${slug}.html`);
   await writeFile(filePath, renderHtmlReport(report, projectPath), { encoding: 'utf8', mode: 0o600 });
   let live: Awaited<ReturnType<typeof startHtmlReportServer>> | undefined;
   try {
     if (regenerate !== undefined) {
-      live = await startHtmlReportServer(projectPath, regenerate);
+      live = await startHtmlReportServer(projectPath, regenerate, report);
     }
     await launch(live?.url ?? filePath);
 

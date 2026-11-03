@@ -1,4 +1,4 @@
-# cncv
+# cncv - **c**heck **N**ode.js **c**ompatible **v**ersions
 
 A TypeScript CLI that checks packages' declared Node.js and npm engine compatibility.
 

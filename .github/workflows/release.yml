@@ -1,4 +1,4 @@
-name: Publish npm Package
+name: Stage npm Package
 
 on:
   release:
@@ -35,5 +35,5 @@ jobs:
           throw new Error('Release tag must match the package version');"
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - name: Publish to npm
-        run: npm publish --provenance --access public
+      - name: Stage npm release for approval
+        run: npm stage publish --provenance --access public

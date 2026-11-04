@@ -13,19 +13,31 @@ pnpm dlx @ivanduplenskikh/cncv@1.0.0 /path/to/project
 
 ## Publishing
 
-Releases publish to npmjs.com through GitHub Actions when a GitHub release is published. Its tag must match the package version, for example `v1.0.0`. The workflow runs checks and uses npm 11 with GitHub OIDC trusted publishing and provenance; no npm token or GitHub Packages permission is required. Provenance requires a public source repository.
+Releases are staged on npmjs.com through GitHub Actions when a GitHub release is published. Its tag must match the package version, for example `v1.2.0`. The workflow runs checks and uses npm 11 with GitHub OIDC trusted publishing and provenance to run `npm stage publish`; no npm token or GitHub Packages permission is required. Provenance requires a public source repository. A successful workflow uploads a candidate, but it does not make that version publicly installable: a maintainer must review and approve it with 2FA.
 
-For the first publication, sign in with an npm account that owns the `@ivanduplenskikh` scope and publish from this checkout:
+For the first publication, use a current npm 11 or newer CLI with `npm stage` support, enable account 2FA, sign in with an npm account that owns the `@ivanduplenskikh` scope, and stage from this checkout:
 
 ```sh
 pnpm install --frozen-lockfile
 npm login --registry=https://registry.npmjs.org
-npm publish --access public
+npm stage publish --access public
 ```
 
-The package's `prepack` script builds and tests it before publishing. npm may require account 2FA verification. Do not put credentials in the repository.
+The package's `prepack` script builds and tests it before staging. Do not put credentials in the repository. Review and approve the initial candidate using the steps below.
 
-After the package exists, open its settings on npmjs.com and add a GitHub Actions trusted publisher with owner `ivanduplenskikh`, repository `cncv`, and workflow filename `release.yml`. Leave the environment unset unless you also configure one in the workflow. Future releases can then publish without a stored token. Increment the package version before publishing another release: npm versions cannot be overwritten, including the version used for the initial manual publication.
+After the package exists, open its settings on npmjs.com and add a GitHub Actions trusted publisher with owner `ivanduplenskikh`, repository `cncv`, and workflow filename `release.yml`. Leave the environment unset unless you also configure one in the workflow. Under Allowed actions, leave both direct `npm publish` and `npm dist-tag` permissions unchecked; `npm stage publish` is always allowed. Future releases can then be staged without a stored token.
+
+After a successful staging run, review the candidate in your npm account's staged publishing interface, or use these commands locally while signed in:
+
+```sh
+npm stage list @ivanduplenskikh/cncv
+npm stage view <stage-id>
+npm stage approve <stage-id>
+```
+
+Replace `<stage-id>` with the candidate's ID from the workflow output or stage list. Check the version, source, provenance, and package contents before approving. Approval requires interactive 2FA and makes the version public; it must not be automated in CI. Use `npm stage reject <stage-id>` instead to reject a candidate.
+
+Increment the package version before staging another release: an existing staged or published version cannot be overwritten. Rerunning a successful staging job for the same version will therefore fail; review the existing candidate instead. Workflow changes must be included in the release tag's commit. Rerunning an older failed run still uses its original workflow, not a later edit on the default branch.
 
 ## Setup
 

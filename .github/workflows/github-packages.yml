@@ -23,7 +23,7 @@ jobs:
       - run: pnpm check
       - name: Select GitHub Packages registry
         run: |
-          npm pkg set publishConfig.registry=https://npm.pkg.github.com
+          npm pkg set name=@ivanduplenskikh/cncv publishConfig.registry=https://npm.pkg.github.com
           npm config set @ivanduplenskikh:registry=https://npm.pkg.github.com --location=project
       - name: Publish to GitHub Packages
         run: npm publish

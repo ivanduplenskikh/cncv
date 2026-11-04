@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import type { CheckOptions } from './check.js';
 import { inspectProject, renderReport } from './check.js';
 import { openHtmlReport } from './html.js';
-import { inspectRemoteProject } from './remote.js';
+import { inspectRemoteProject, resolveNodeVersion } from './remote.js';
 
 const help = `Usage: cncv [module-path] [options]
 
@@ -15,7 +15,7 @@ Path: a local project, package.json file, or public GitHub manifest/tree URL.
 Remote: uses a sibling npm v2/v3 lockfile, or labeled public npm estimates.
 
 Options:
-  --node <version>  Target exact Node.js version (default: running version)
+  --node <version>  Exact version or major (18 = latest v18; default: running)
   --npm <version>   Target exact npm version (default: installed npm)
   --direct          Only check the project and direct dependencies
   --omit-dev        Exclude the project's devDependencies (default)
@@ -59,7 +59,7 @@ try {
     const options: CheckOptions = { direct: values.direct === true, omitDev: values['include-dev'] !== true };
 
     if (values.node !== undefined) {
-      options.nodeVersion = values.node;
+      options.nodeVersion = await resolveNodeVersion(values.node);
     }
 
     if (values.npm !== undefined) {

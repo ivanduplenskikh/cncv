@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -44,6 +45,10 @@ export function remoteManifestUrl(input: string): URL {
 async function fetchJson(url: string): Promise<unknown> {
   const response = await fetch(url, { signal: AbortSignal.timeout(20_000), redirect: 'error' });
 
+  return readJsonResponse(response, url);
+}
+
+async function readJsonResponse(response: Response, url: string): Promise<unknown> {
   if (response.status === 404) {
     return null;
   }
@@ -76,6 +81,146 @@ async function fetchJson(url: string): Promise<unknown> {
   const data: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
 
   return data;
+}
+
+const nodeReleaseUrl = 'https://nodejs.org/dist/index.json';
+const nodeReleaseTtl = 24 * 60 * 60 * 1000;
+const nodeReleasesSchema = z.array(z.object({
+  version: z.string().refine((value) => semver.valid(value) !== null),
+}));
+const nodeReleaseCacheSchema = z.object({
+  checkedAt: z.number().nonnegative(),
+  retryAfter: z.number().nonnegative().optional(),
+  etag: z.string().optional(),
+  lastModified: z.string().optional(),
+  releases: nodeReleasesSchema,
+});
+type NodeReleaseCache = z.infer<typeof nodeReleaseCacheSchema>;
+let pendingNodeReleases: Promise<z.infer<typeof nodeReleasesSchema>> | undefined;
+
+function parseNodeReleases(data: unknown): z.infer<typeof nodeReleasesSchema> {
+  const releases = nodeReleasesSchema.safeParse(data);
+
+  if (!releases.success) {
+    throw new Error('Invalid Node.js release index. Use an exact --node version to skip the lookup.');
+  }
+
+  return releases.data;
+}
+
+async function saveNodeReleaseCache(filePath: string, cache: NodeReleaseCache): Promise<void> {
+  const temporary = `${filePath}.${randomUUID()}.tmp`;
+
+  try {
+    await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    await writeFile(temporary, JSON.stringify(cache), { mode: 0o600, flag: 'wx' });
+    await rename(temporary, filePath);
+  } catch {
+    console.error('cncv: Could not save the Node.js release cache; future lookups may require network access.');
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+async function loadNodeReleases(): Promise<z.infer<typeof nodeReleasesSchema>> {
+  const filePath = path.join(os.homedir(), '.cncv', 'cache', 'node-releases.json');
+  const now = Date.now();
+  let cached: NodeReleaseCache | undefined;
+
+  try {
+    const data: unknown = JSON.parse(await readFile(filePath, 'utf8'));
+    cached = nodeReleaseCacheSchema.parse(data);
+
+    if (cached.checkedAt > now) {
+      cached = undefined;
+    }
+  } catch {
+    cached = undefined;
+  }
+
+  if (cached !== undefined && now - cached.checkedAt < nodeReleaseTtl) {
+    return cached.releases;
+  }
+
+  if (cached?.retryAfter !== undefined && cached.retryAfter > now && cached.retryAfter <= now + nodeReleaseTtl) {
+    console.error('cncv: Using stale cached Node.js releases; the next refresh will be retried after the daily retry interval.');
+
+    return cached.releases;
+  }
+
+  let updated: NodeReleaseCache;
+
+  try {
+    const headers: Record<string, string> = {};
+
+    if (cached?.etag !== undefined) {
+      headers['If-None-Match'] = cached.etag;
+    }
+
+    if (cached?.lastModified !== undefined) {
+      headers['If-Modified-Since'] = cached.lastModified;
+    }
+
+    const response = await fetch(nodeReleaseUrl, { headers, signal: AbortSignal.timeout(20_000), redirect: 'error' });
+    const releases = response.status === 304 && cached !== undefined
+      ? cached.releases : parseNodeReleases(await readJsonResponse(response, nodeReleaseUrl));
+    updated = { checkedAt: now, releases };
+    const etag = response.headers.get('etag') ?? (response.status === 304 ? cached?.etag : undefined);
+    const lastModified = response.headers.get('last-modified') ?? (response.status === 304 ? cached?.lastModified : undefined);
+
+    if (etag !== undefined) {
+      updated.etag = etag;
+    }
+
+    if (lastModified !== undefined) {
+      updated.lastModified = lastModified;
+    }
+  } catch (error) {
+    if (cached === undefined) {
+      throw error;
+    }
+
+    console.error(`cncv: Could not refresh Node.js releases; using stale cached data. ${error instanceof Error ? error.message : 'Unknown error'}`);
+    await saveNodeReleaseCache(filePath, { ...cached, retryAfter: now + nodeReleaseTtl });
+
+    return cached.releases;
+  }
+
+  await saveNodeReleaseCache(filePath, updated);
+
+  return updated.releases;
+}
+
+async function cachedNodeReleases(): Promise<z.infer<typeof nodeReleasesSchema>> {
+  pendingNodeReleases ??= loadNodeReleases();
+
+  try {
+    return await pendingNodeReleases;
+  } finally {
+    pendingNodeReleases = undefined;
+  }
+}
+
+export async function resolveNodeVersion(input: string, request?: FetchJson): Promise<string> {
+  const exact = semver.valid(input);
+
+  if (exact !== null) {
+    return exact;
+  }
+
+  if (!/^v?(0|[1-9]\d*)$/.test(input) || semver.validRange(input) === null) {
+    throw new Error('Node version must be an exact version, such as 22.14.0, or a major version, such as 18.');
+  }
+
+  const major = input.replace(/^v/, '');
+  const releases = request === undefined ? await cachedNodeReleases() : parseNodeReleases(await request(nodeReleaseUrl));
+  const latest = semver.maxSatisfying(releases.map((release) => release.version), `${major}.x`);
+
+  if (latest === null) {
+    throw new Error(`No published stable Node.js release found for major ${major}.`);
+  }
+
+  return new semver.SemVer(latest).version;
 }
 
 const lockSchema = z.object({

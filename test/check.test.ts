@@ -256,6 +256,43 @@ await test('CLI supports help and reports unknown flags without a stack trace', 
   assert.doesNotMatch(result.stderr, /at file:/);
 });
 
+await test('CLI resolves Node major targets and keeps exact targets offline', async (context) => {
+  const directory = await fixture(context, { name: 'example', engines: { node: '>=18.20.8 <19' } });
+  const env = { ...process.env, HOME: directory, USERPROFILE: directory };
+  const lookup = `globalThis.fetch = async (url) => {
+    if (url !== 'https://nodejs.org/dist/index.json') { throw new Error('Unexpected URL'); }
+    return new Response(JSON.stringify([{ version: 'v18.20.2' }, { version: 'v18.20.8' }, { version: 'v20.0.0' }]));
+  };`;
+  const major = spawnSync(process.execPath, [
+    '--import', `data:text/javascript,${encodeURIComponent(lookup)}`,
+    ...cliArgs, directory, '--node', '18', '--npm', '10.9.2',
+  ], { encoding: 'utf8', env });
+  assert.equal(major.status, 0, major.stderr);
+  assert.match(major.stdout, /Node.js target: 18.20.8/);
+  const offline = 'globalThis.fetch = () => Promise.reject(new Error("Unexpected network request"));';
+  const exact = spawnSync(process.execPath, [
+    '--import', `data:text/javascript,${encodeURIComponent(offline)}`,
+    ...cliArgs, directory, '--node', '18.20.8', '--npm', '10.9.2',
+  ], { encoding: 'utf8', env });
+  assert.equal(exact.status, 0, exact.stderr);
+  assert.match(exact.stdout, /Node.js target: 18.20.8/);
+  const cached = spawnSync(process.execPath, [
+    '--import', `data:text/javascript,${encodeURIComponent(offline)}`,
+    ...cliArgs, directory, '--node', '18', '--npm', '10.9.2',
+  ], { encoding: 'utf8', env });
+  assert.equal(cached.status, 0, cached.stderr);
+  assert.match(cached.stdout, /Node.js target: 18.20.8/);
+  await rm(path.join(directory, '.cncv'), { recursive: true, force: true });
+  const failedLookup = 'globalThis.fetch = async () => new Response("Unavailable", { status: 503 });';
+  const failed = spawnSync(process.execPath, [
+    '--import', `data:text/javascript,${encodeURIComponent(failedLookup)}`,
+    ...cliArgs, directory, '--node', '18', '--npm', '10.9.2',
+  ], { encoding: 'utf8', env });
+  assert.equal(failed.status, 2);
+  assert.match(failed.stderr, /HTTP 503 fetching https:\/\/nodejs.org\/dist\/index.json/);
+  assert.doesNotMatch(failed.stdout, /Node.js target:/);
+});
+
 await test('dependency engine minima respect alternatives, upper bounds, and prereleases', () => {
   const row = (engine: string, npmEngine: string): PackageRow => ({
     name: 'dependency', version: '1.0.0', engine, npmEngine, kind: 'dependency', status: 'OK', path: '.',

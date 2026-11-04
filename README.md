@@ -26,7 +26,7 @@ For local checks, install the target project's dependencies first. The path defa
 
 | Option | Effect |
 | --- | --- |
-| `--node <version>` | Exact Node.js target; defaults to the running version. |
+| `--node <version>` | Exact version or major (`18` selects the latest stable v18 release); defaults to the running version. |
 | `--npm <version>` | Exact npm target; defaults to `npm --version`. Required if detection fails. |
 | `--direct` | Check only the project and direct dependencies. |
 | `--include-dev` | Include the project's dev dependencies. |
@@ -35,6 +35,12 @@ For local checks, install the target project's dependencies first. The path defa
 | `--help`, `-h` | Show help. |
 
 Node and npm targets are independent; selecting a Node version does not select or validate a matching npm release.
+
+```sh
+pnpm start . --node 18 --no-open
+```
+
+A major target (also accepted as `v18`) uses the official Node.js release index, shared across projects and majors in `~/.cncv/cache/node-releases.json`. The index is cached for 24 hours, then revalidated on the next lookup using HTTP validators when available. If a refresh fails, cncv warns, uses the last valid index, and waits another 24 hours before retrying. The first lookup needs network access. The report shows the resolved exact version; HTML refreshes keep that target. Exact targets such as `18.20.8` bypass both cache and network for offline or reproducible checks. Minor-only targets and ranges are not accepted.
 
 ## GitHub Projects
 

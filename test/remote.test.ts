@@ -1,12 +1,186 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import type { TestContext } from 'node:test';
 import { test } from 'node:test';
 
 import { renderReport } from '../src/check.js';
 import { renderHtmlReport } from '../src/html.js';
-import { inspectRemoteProject, remoteManifestUrl } from '../src/remote.js';
+import { inspectRemoteProject, remoteManifestUrl, resolveNodeVersion } from '../src/remote.js';
 
 const input = 'https://github.com/microsoft/azure-pipelines-tasks/blob/master/Tasks/AzureCLIV1/package.json';
 const raw = 'https://raw.githubusercontent.com/microsoft/azure-pipelines-tasks/master/Tasks/AzureCLIV1/package.json';
+
+async function releaseCache(context: TestContext): Promise<string> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'cncv-node-cache-'));
+  context.mock.method(os, 'homedir', () => directory);
+  context.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const cacheDirectory = path.join(directory, '.cncv', 'cache');
+  await mkdir(cacheDirectory, { recursive: true });
+
+  return path.join(cacheDirectory, 'node-releases.json');
+}
+
+await test('Node release cache shares fresh metadata across majors and concurrent lookups', async (context) => {
+  const filePath = await releaseCache(context);
+  const releases = [{ version: 'v18.20.8' }, { version: 'v20.19.0' }];
+  const request = context.mock.method(globalThis, 'fetch', () => Promise.resolve(new Response(JSON.stringify(releases))));
+  assert.deepEqual(await Promise.all([resolveNodeVersion('18'), resolveNodeVersion('20')]), ['18.20.8', '20.19.0']);
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  await assert.rejects(resolveNodeVersion('999'), /No published stable/);
+  assert.equal(request.mock.callCount(), 1);
+  assert.match(await readFile(filePath, 'utf8'), /v18.20.8/);
+});
+
+await test('Node release cache revalidates daily with HTTP validators and accepts newer metadata', async (context) => {
+  const filePath = await releaseCache(context);
+  let now = Date.now();
+  context.mock.method(Date, 'now', () => now);
+  let requests = 0;
+  const modified = 'Wed, 01 Jan 2025 00:00:00 GMT';
+  context.mock.method(globalThis, 'fetch', (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    requests++;
+    assert.equal(url, 'https://nodejs.org/dist/index.json');
+
+    if (requests === 2) {
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get('if-none-match'), '"index-v1"');
+      assert.equal(headers.get('if-modified-since'), modified);
+
+      return Promise.resolve(new Response(null, { status: 304 }));
+    }
+
+    return Promise.resolve(new Response(JSON.stringify([{ version: requests === 1 ? 'v18.20.8' : 'v18.20.9' }]), {
+      headers: requests === 1 ? { etag: '"index-v1"', 'last-modified': modified } : { etag: '"index-v2"' },
+    }));
+  });
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  now += 86_400_000 - 1;
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  assert.equal(requests, 1);
+  now++;
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  assert.equal(requests, 2);
+  const revalidated: unknown = JSON.parse(await readFile(filePath, 'utf8'));
+  assert.deepEqual(revalidated, {
+    checkedAt: now, releases: [{ version: 'v18.20.8' }], etag: '"index-v1"', lastModified: modified,
+  });
+  now += 86_400_000;
+  assert.equal(await resolveNodeVersion('18'), '18.20.9');
+  assert.equal(requests, 3);
+  const updated: unknown = JSON.parse(await readFile(filePath, 'utf8'));
+  assert.deepEqual(updated, { checkedAt: now, releases: [{ version: 'v18.20.9' }], etag: '"index-v2"' });
+});
+
+await test('Node release cache warns on stale fallback and throttles failed refreshes for a day', async (context) => {
+  const filePath = await releaseCache(context);
+  let now = Date.now();
+  context.mock.method(Date, 'now', () => now);
+  const checkedAt = now - 86_400_000;
+  await writeFile(filePath, JSON.stringify({ checkedAt, releases: [{ version: 'v18.20.8' }] }));
+  const warnings: string[] = [];
+  context.mock.method(console, 'error', (message: unknown): void => {
+    warnings.push(String(message));
+  });
+  let requests = 0;
+  context.mock.method(globalThis, 'fetch', (): Promise<Response> => {
+    requests++;
+
+    return requests === 1 ? Promise.reject(new Error('Offline'))
+      : Promise.resolve(new Response(JSON.stringify([{ version: 'v18.20.9' }])));
+  });
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  assert.equal(requests, 1);
+  assert.match(warnings.join('\n'), /stale cached/);
+  const failed: unknown = JSON.parse(await readFile(filePath, 'utf8'));
+  assert.deepEqual(failed, { checkedAt, releases: [{ version: 'v18.20.8' }], retryAfter: now + 86_400_000 });
+  now += 86_400_000;
+  assert.equal(await resolveNodeVersion('18'), '18.20.9');
+  assert.equal(requests, 2);
+  const recovered: unknown = JSON.parse(await readFile(filePath, 'utf8'));
+  assert.deepEqual(recovered, { checkedAt: now, releases: [{ version: 'v18.20.9' }] });
+});
+
+await test('Node release cache replaces corrupt data and does not overwrite valid data with invalid responses', async (context) => {
+  const filePath = await releaseCache(context);
+  let now = Date.now();
+  context.mock.method(Date, 'now', () => now);
+  context.mock.method(console, 'error', () => undefined);
+  let response = [{ version: 'v18.20.8' }];
+  let requests = 0;
+  context.mock.method(globalThis, 'fetch', (): Promise<Response> => {
+    requests++;
+
+    return Promise.resolve(new Response(JSON.stringify(response)));
+  });
+
+  for (const corrupt of ['{', JSON.stringify({ checkedAt: now, releases: [{ version: 'invalid' }] }),
+    JSON.stringify({ checkedAt: now + 86_400_000, releases: [{ version: 'v18.0.0' }] })]) {
+    await writeFile(filePath, corrupt);
+    assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  }
+
+  assert.equal(requests, 3);
+  now += 86_400_000;
+  response = [{ version: 'invalid' }];
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  assert.match(await readFile(filePath, 'utf8'), /v18.20.8/);
+  assert.doesNotMatch(await readFile(filePath, 'utf8'), /invalid/);
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  assert.equal(requests, 4);
+});
+
+await test('Node release cache write failures do not break a valid lookup or leave temporary files', async (context) => {
+  const filePath = await releaseCache(context);
+  await mkdir(filePath);
+  const warning = context.mock.method(console, 'error', () => undefined);
+  context.mock.method(globalThis, 'fetch', () => Promise.resolve(new Response(JSON.stringify([{ version: 'v18.20.8' }]))));
+  assert.equal(await resolveNodeVersion('18'), '18.20.8');
+  assert.equal(warning.mock.callCount(), 1);
+  assert.deepEqual(await readdir(path.dirname(filePath)), ['node-releases.json']);
+});
+
+await test('resolves Node major versions to the latest stable release from the official index', async () => {
+  const requests: string[] = [];
+  const request = (url: string): Promise<unknown> => {
+    requests.push(url);
+
+    return Promise.resolve([
+      { version: 'v18.20.2' }, { version: 'v20.0.0' }, { version: 'v18.20.10' },
+      { version: 'v18.9.9' }, { version: 'v18.21.0-rc.1' }, { version: 'v18.20.8' },
+    ]);
+  };
+  assert.equal(await resolveNodeVersion('18', request), '18.20.10');
+  assert.deepEqual(requests, ['https://nodejs.org/dist/index.json']);
+  assert.equal(await resolveNodeVersion('v18', request), '18.20.10');
+});
+
+await test('exact and invalid Node targets do not fetch release metadata', async () => {
+  const request = (): Promise<unknown> => Promise.reject(new Error('Unexpected release lookup'));
+  assert.equal(await resolveNodeVersion('18.20.8', request), '18.20.8');
+  assert.equal(await resolveNodeVersion('v18.20.8', request), '18.20.8');
+  assert.equal(await resolveNodeVersion('22.0.0-rc.1', request), '22.0.0-rc.1');
+
+  for (const invalid of ['18.20', '>=18', '18.x', 'latest', '018', '-1', '', '999999999999999999999']) {
+    await assert.rejects(resolveNodeVersion(invalid, request), /exact version.*major version/);
+  }
+});
+
+await test('Node major lookup reports unavailable releases, malformed data, and network failures', async () => {
+  for (const data of [[], [{ version: 'v20.0.0' }], [{ version: 'v18.21.0-rc.1' }]]) {
+    await assert.rejects(resolveNodeVersion('18', () => Promise.resolve(data)), /No published stable Node.js release/);
+  }
+
+  for (const data of [null, {}, [{ version: 18 }], [{ version: 'invalid' }]]) {
+    await assert.rejects(resolveNodeVersion('18', () => Promise.resolve(data)), /Invalid Node.js release index/);
+  }
+
+  await assert.rejects(resolveNodeVersion('18', () => Promise.reject(new Error('Network unavailable'))), /Network unavailable/);
+});
 
 await test('converts nested GitHub blob URLs and accepts raw URLs', () => {
   assert.equal(remoteManifestUrl(input).href, raw);

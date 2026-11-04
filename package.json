@@ -25,7 +25,7 @@
     "dist/src"
   ],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=18"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

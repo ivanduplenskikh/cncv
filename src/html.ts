@@ -19,9 +19,11 @@ function escapeHtml(value: string): string {
 function reportIdentity(projectPath: string, report?: Report): { name: string; slug: string; id: string } {
   const remote = /^https?:\/\//i.test(projectPath);
   let target = remote ? remoteManifestUrl(projectPath).href : path.resolve(projectPath);
+
   if (!remote && path.basename(target) === 'package.json') {
     target = path.dirname(target);
   }
+
   const parts = remote ? new URL(target).pathname.split('/').filter(Boolean) : [];
   const fallback = remote ? (parts.length === 4 ? parts[1] : parts.at(-2)) : path.basename(target);
   const rootName = report?.rows.find((row) => row.kind === 'project')?.name;
@@ -142,22 +144,26 @@ export async function startHtmlReportServer(
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
+
     if (request.headers.host !== host || request.url !== route) {
       response.writeHead(404).end('Not found');
 
       return;
     }
+
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       response.setHeader('Allow', 'GET, HEAD');
       response.writeHead(405).end('Method not allowed');
 
       return;
     }
+
     if (request.method === 'HEAD') {
       response.writeHead(200).end();
 
       return;
     }
+
     try {
       response.end(renderHtmlReport(await regenerate(), projectPath));
     } catch (error) {
@@ -176,10 +182,12 @@ export async function startHtmlReportServer(
     });
   });
   const address = server.address();
+
   if (address === null || typeof address === 'string') {
     server.close();
     throw new Error('Cannot determine HTML report server address.');
   }
+
   host = `127.0.0.1:${String(address.port)}`;
 
   return {
@@ -209,10 +217,12 @@ export async function openHtmlReport(
   const filePath = path.join(directory, `${slug}.html`);
   await writeFile(filePath, renderHtmlReport(report, projectPath), { encoding: 'utf8', mode: 0o600 });
   let live: Awaited<ReturnType<typeof startHtmlReportServer>> | undefined;
+
   try {
     if (regenerate !== undefined) {
       live = await startHtmlReportServer(projectPath, regenerate, report);
     }
+
     await launch(live?.url ?? filePath);
 
     return { filePath, ...live };

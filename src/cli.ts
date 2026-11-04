@@ -44,22 +44,28 @@ try {
       help: { type: 'boolean', short: 'h' },
     },
   });
+
   if (values.help === true) {
     console.log(help);
   } else {
     if (positionals.length > 1) {
       throw new Error('Expected at most one module path. See --help.');
     }
+
     if (values['omit-dev'] === true && values['include-dev'] === true) {
       throw new Error('Cannot combine --omit-dev and --include-dev.');
     }
+
     const options: CheckOptions = { direct: values.direct === true, omitDev: values['include-dev'] !== true };
+
     if (values.node !== undefined) {
       options.nodeVersion = values.node;
     }
+
     if (values.npm !== undefined) {
       options.npmVersion = values.npm;
     }
+
     const input = positionals[0] ?? '.';
     const remote = /^https?:\/\//i.test(input);
     const report = remote ? await inspectRemoteProject(input, options) : await inspectProject(input, options);
@@ -68,19 +74,24 @@ try {
       columns: process.stdout.columns || 100,
     }));
     process.exitCode = report.exitCode;
+
     if (values['no-open'] !== true) {
       const projectPath = remote ? input : path.resolve(input);
       const refreshOptions: CheckOptions = { ...options, nodeVersion: report.nodeVersion };
+
       if (report.npmVersion !== undefined) {
         refreshOptions.npmVersion = report.npmVersion;
       }
+
       const html = await openHtmlReport(report, projectPath, undefined, () => remote
         ? inspectRemoteProject(input, refreshOptions) : inspectProject(projectPath, refreshOptions));
       console.log(`HTML report: ${html.url ?? pathToFileURL(html.filePath).href}`);
+
       if (html.url !== undefined) {
         console.log('Each page load reruns the check. Keep cncv running; Ctrl+C stops the report server.');
         console.log(`HTML snapshot: ${pathToFileURL(html.filePath).href}`);
       }
+
       if (html.warning !== undefined) {
         console.error(`cncv: ${html.warning}`);
       }

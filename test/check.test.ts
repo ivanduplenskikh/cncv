@@ -46,9 +46,11 @@ await test('checks root, scoped, dev, optional, peer, and nested packages', asyn
   await writePackage(path.join(directory, 'node_modules/@scope/parent/node_modules/child'), {
     name: 'child', version: '2.0.0', engines: { node: '<20' },
   });
+
   for (const name of ['dev', 'optional', 'peer']) {
     await writePackage(path.join(directory, 'node_modules', name), { name, version: '1.0.0' });
   }
+
   const report = await inspectProject(directory, { nodeVersion: '22.14.0', omitDev: false });
   assert.equal(report.rows.length, 6);
   assert.equal(report.rows.find((row) => row.name === '@scope/parent')?.status, 'OK');
@@ -102,6 +104,7 @@ await test('dev dependencies are omitted by default and can be explicitly includ
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stdout, /dev-only/);
   }
+
   const include = spawnSync(process.execPath, [...cliArgs, directory, '--include-dev'], { encoding: 'utf8' });
   assert.equal(include.status, 2);
   assert.match(include.stdout, /dev-only/);
@@ -163,9 +166,11 @@ await test('traces unknown packages through compatible intermediates and shared 
     name: 'leaf', version: '3.0.0', engines: { node: '>=22' },
   });
   const report = await inspectProject(directory, { nodeVersion: '20.0.0' });
+
   for (const name of ['project', 'parent', 'other']) {
     assert.equal(report.rows.find((row) => row.name === name)?.status, 'BLOCKED');
   }
+
   const parent = report.rows.find((row) => row.name === 'parent');
   assert.match(parent?.details ?? '', /parent@1.0.0 -> middle@2.0.0 -> leaf@3.0.0/);
   assert.match(parent?.details ?? '', /engines.node: >=22/);
@@ -174,9 +179,11 @@ await test('traces unknown packages through compatible intermediates and shared 
   const output = renderReport(report, { columns: 100 });
   assert.match(output, /! BLOCKED/);
   assert.match(output, /Blocked by/);
+
   for (const line of output.split('\n').filter((line) => /^[\u2500-\u257f]/u.test(line))) {
     assert.ok(line.length <= 100, line);
   }
+
   assert.equal(stripVTControlCharacters(renderReport(report, { columns: 100, color: true })), output);
 
   const direct = await inspectProject(directory, { nodeVersion: '20.0.0', direct: true });
@@ -283,9 +290,11 @@ await test('dependency engine minima disclose incomplete metadata independently 
   assert.equal(partial.node.status, 'partial');
   assert.equal(partial.node.version, '22.0.0');
   assert.equal(partial.npm.status, 'partial');
+
   for (const status of ['MISSING', 'ERROR'] as const) {
     assert.equal(minimumEngines({ ...report, rows: [base, { ...base, status }] }).node.status, 'partial');
   }
+
   assert.equal(minimumEngines({ ...report, rows: [{ ...base, engine: 'invalid' }] }).node.status, 'unknown');
   assert.equal(minimumEngines({ ...report, rows: [{ ...base, engine: '*' }] }).node.status, 'unknown');
   assert.equal(minimumEngines({ ...report, rows: [] }).node.status, 'unknown');
@@ -296,12 +305,14 @@ await test('terminal and HTML show both dependency minima even when all packages
   await writePackage(path.join(directory, 'node_modules/first'), { engines: { node: '^18 || >=22', npm: '>=9 <11' } });
   await writePackage(path.join(directory, 'node_modules/second'), { engines: { node: '>=20', npm: '>=10' } });
   const report = await inspectProject(directory, { nodeVersion: '24.0.0', npmVersion: '10.0.0' });
+
   for (const output of [renderReport(report), renderHtmlReport(report, directory)]) {
     assert.match(output, /Minimum Node.js \(engines.node\): 22.0.0/);
     assert.match(output, /Minimum npm \(engines.npm\): 10.0.0/);
     assert.match(output, /All checked packages are compatible/);
     assert.match(output, /Upper bounds still apply/);
   }
+
   const incompatible = await inspectProject(directory, { nodeVersion: '16.0.0', npmVersion: '8.0.0' });
   assert.match(renderReport(incompatible), /Minimum Node.js \(engines.node\): 22.0.0/);
   assert.match(renderHtmlReport(incompatible, directory), /Minimum npm \(engines.npm\): 10.0.0/);
@@ -317,14 +328,17 @@ await test('terminal and HTML label partial, conflicting, and unknown dependency
 
     return [renderReport(report), renderHtmlReport(report, '.')];
   };
+
   for (const output of render([base, { ...base, engine: '(not declared)', npmEngine: 'invalid' }])) {
     assert.match(output, /22.0.0 \(partial\)/);
     assert.match(output, /10.0.0 \(partial\)/);
   }
+
   for (const output of render([base, { ...base, engine: '<20', npmEngine: '<9' }])) {
     assert.match(output, /engines.node\): conflict/);
     assert.match(output, /engines.npm\): conflict/);
   }
+
   for (const output of render([])) {
     assert.match(output, /engines.node\): unknown/);
     assert.match(output, /engines.npm\): unknown/);
@@ -335,6 +349,7 @@ await test('minimum information blocks are highlighted, responsive, and bounded 
   const report: Report = {
     nodeVersion: '24.0.0', exitCode: 0, rows: [],
   };
+
   for (const columns of [64, 80, 140]) {
     const plain = renderReport(report, { columns });
     const colored = renderReport(report, { columns, color: true });
@@ -345,6 +360,7 @@ await test('minimum information blocks are highlighted, responsive, and bounded 
     assert.ok(lines.length > 3);
     assert.ok(lines.every((line) => line.length <= columns));
   }
+
   const html = renderHtmlReport(report, '.');
   assert.match(html, /class="minimums" aria-label="Minimum dependency versions"/);
   assert.equal((html.match(/class="minimum-item" data-status="unknown"/g) ?? []).length, 2);
@@ -379,16 +395,21 @@ await test('table wraps long cells, sorts by severity and name, and highlights i
   const tableLines = plain.split('\n').filter((line) => /^[\u2500-\u257f]/u.test(line));
   const tableOutput = tableLines.slice(tableLines.findIndex((line) => line.includes('Package'))).join('\n');
   const names = ['alpha', 'zebra', 'broken', 'invalid', 'missing', 'unknown'];
+
   for (const [index, name] of names.entries()) {
     const next = names[index + 1];
+
     if (next !== undefined) {
       assert.ok(tableOutput.indexOf(name) < tableOutput.indexOf(next));
     }
   }
+
   assert.ok(tableLines.length > report.rows.length);
+
   for (const line of tableLines) {
     assert.ok(line.length <= 80, line);
   }
+
   assert.deepEqual(report.rows, original);
 });
 
@@ -444,12 +465,14 @@ await test('missing npm declarations do not change node results and invalid npm 
   const directory = await fixture(context, { name: 'project', engines: { node: '>=20' } });
   const options = { nodeVersion: '22.14.0', npmVersion: '10.9.2' };
   assert.equal((await inspectProject(directory, options)).rows[0]?.status, 'OK');
+
   for (const npm of ['banana', 10, null]) {
     await writePackage(directory, { name: 'project', engines: { node: '>=20', npm } });
     const report = await inspectProject(directory, options);
     assert.equal(report.rows[0]?.status, 'INVALID');
     assert.equal(report.exitCode, 2);
   }
+
   await writePackage(directory, { name: 'project', engines: { npm: '>=10' } });
   assert.equal((await inspectProject(directory, options)).rows[0]?.status, 'UNKNOWN');
   await assert.rejects(inspectProject(directory, { npmVersion: '>=10' }), /npm version must be exact/);
@@ -498,6 +521,7 @@ await test('HTML regeneration errors are escaped and a later page load can recov
   let attempts = 0;
   const server = await startHtmlReportServer('/project', () => {
     attempts++;
+
     if (attempts === 1) {
       return Promise.reject(new Error('<script>broken</script>'));
     }
@@ -599,6 +623,7 @@ await test('HTML names fall back to the check path and normalize equivalent remo
   assert.equal(first.filePath, second.filePath);
   assert.equal(path.basename(first.filePath), 'my-package.html');
   assert.match(await readFile(first.filePath, 'utf8'), /<title>cncv \| my-package \|/);
+
   for (const name of ['CON', '../../<script>alert(1)</script>']) {
     const named: Report = {
       ...report,
@@ -612,6 +637,7 @@ await test('HTML names fall back to the check path and normalize equivalent remo
     });
     assert.match(path.basename(result.filePath), /^[a-z0-9-]+\.html$/);
     assert.doesNotMatch(await readFile(result.filePath, 'utf8'), /<script>/);
+
     if (name === 'CON') {
       assert.equal(path.basename(result.filePath), 'project-con.html');
     }

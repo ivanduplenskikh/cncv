@@ -11,6 +11,7 @@ const raw = 'https://raw.githubusercontent.com/microsoft/azure-pipelines-tasks/m
 await test('converts nested GitHub blob URLs and accepts raw URLs', () => {
   assert.equal(remoteManifestUrl(input).href, raw);
   assert.equal(remoteManifestUrl(`${raw}?x=1#test`).href, raw);
+
   for (const url of ['http://github.com/a/b/blob/main/package.json', 'https://example.com/package.json',
     'https://github.com/a/b', 'https://user:pass@github.com/a/b/blob/main/package.json']) {
     assert.throws(() => remoteManifestUrl(url));
@@ -52,6 +53,7 @@ await test('rejects unsafe lock paths, workspace links, and unsupported lock for
   ]) {
     await assert.rejects(inspectRemoteProject(input, {}, (url) => Promise.resolve(url === raw ? {} : lock)));
   }
+
   await assert.rejects(inspectRemoteProject(input, { nodeVersion: 'nope' }), /exact/);
 });
 
@@ -60,12 +62,15 @@ await test('missing npm lockfile uses labeled registry estimates with tracing an
   const manifest = { name: 'project', dependencies: { parent: '^1', second: 'latest' }, devDependencies: { dev: '*' } };
   const request = (url: string): Promise<unknown> => {
     requests.push(url);
+
     if (url === raw) {
       return Promise.resolve(manifest);
     }
+
     if (url.endsWith('package-lock.json')) {
       return Promise.resolve(null);
     }
+
     if (url.endsWith('/parent')) {
       return Promise.resolve({
         versions: {
@@ -75,6 +80,7 @@ await test('missing npm lockfile uses labeled registry estimates with tracing an
         },
       });
     }
+
     if (url.endsWith('/second')) {
       return Promise.resolve({
         'dist-tags': { latest: '2.0.0' },
@@ -83,6 +89,7 @@ await test('missing npm lockfile uses labeled registry estimates with tracing an
         },
       });
     }
+
     throw new Error(`Unexpected request: ${url}`);
   };
   const report = await inspectRemoteProject(input, { nodeVersion: '20.0.0' }, request);
@@ -102,6 +109,7 @@ await test('registry estimates check the overridden version and its engines', as
     if (url === raw) {
       return Promise.resolve({ dependencies: { child: '*' }, overrides: { child: '1.0.0' } });
     }
+
     if (url.endsWith('package-lock.json')) {
       return Promise.resolve(null);
     }
@@ -124,6 +132,7 @@ await test('registry estimates reject unsupported sources and unavailable versio
       if (url === raw) {
         return Promise.resolve({ dependencies: { parent: range } });
       }
+
       if (url.endsWith('package-lock.json')) {
         return Promise.resolve(null);
       }
@@ -142,9 +151,11 @@ await test('nested npm overrides keep shared versions separate by context and ha
     if (url === raw) {
       return Promise.resolve(manifest);
     }
+
     if (url.endsWith('package-lock.json')) {
       return Promise.resolve(null);
     }
+
     if (url.endsWith('/parent')) {
       return Promise.resolve({
         versions: {
@@ -153,6 +164,7 @@ await test('nested npm overrides keep shared versions separate by context and ha
         },
       });
     }
+
     if (url.endsWith('/branch')) {
       return Promise.resolve({
         versions: {
@@ -189,6 +201,7 @@ await test('registry overrides support scoped names, npm references, and flat pn
           dependencies: { '@scope/child': '^1', baseline: '1.0.0' }, ...configuration,
         });
       }
+
       if (url.endsWith('package-lock.json')) {
         return Promise.resolve(null);
       }
@@ -220,9 +233,11 @@ await test('registry estimates reject unsupported or malformed overrides', async
       if (url === raw) {
         return Promise.resolve({ dependencies: { child: '*' }, ...configuration });
       }
+
       if (url.endsWith('package-lock.json')) {
         return Promise.resolve(null);
       }
+
       throw new Error(`Unexpected request: ${url}`);
     }), /override|Unsupported remote dependency/i);
   }
@@ -241,11 +256,13 @@ await test('remote lockfiles remain authoritative when overrides are declared', 
 await test('remote npm engine checks work for both lockfile metadata and registry estimates', async () => {
   const manifest = { name: 'project', dependencies: { child: '*' } };
   const child = { name: 'child', version: '1.0.0', engines: { node: '>=20', npm: '>=10' } };
+
   for (const locked of [true, false]) {
     const report = await inspectRemoteProject(input, { nodeVersion: '22.14.0', npmVersion: '9.9.0' }, (url) => {
       if (url === raw) {
         return Promise.resolve(manifest);
       }
+
       if (url.endsWith('package-lock.json')) {
         return Promise.resolve(locked ? { lockfileVersion: 3, packages: { 'node_modules/child': child } } : null);
       }
@@ -258,5 +275,6 @@ await test('remote npm engine checks work for both lockfile metadata and registr
     assert.match(report.rows.find((row) => row.name === 'project')?.details ?? '', /engines.npm: >=10/);
     assert.equal(report.exitCode, 1);
   }
+
   await assert.rejects(inspectRemoteProject(input, { npmVersion: 'latest' }), /npm version must be exact/);
 });

@@ -193,14 +193,20 @@
             "prev": "*",
             "next": [
               "function",
-              "class"
+              "class",
+              "for",
+              "try",
+              "if"
             ]
           },
           {
             "blankLine": "always",
             "prev": [
               "function",
-              "class"
+              "class",
+              "for",
+              "try",
+              "if"
             ],
             "next": "*"
           }

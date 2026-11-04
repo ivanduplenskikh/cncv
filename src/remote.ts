@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -214,7 +214,7 @@ export async function inspectRemoteProject(
   if (entries.length > 10_000) {
     throw new Error('Remote lockfile exceeds 10,000 package locations.');
   }
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'cncv-remote-'));
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cncv-remote-')));
   try {
     await writeManifest(directory, manifest);
     const origins = lock === null ? await materializeRegistry(manifest, directory, request, options) : new Map<string, string>();

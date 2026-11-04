@@ -2,21 +2,30 @@
 
 A TypeScript CLI that checks packages' declared Node.js and npm engine compatibility.
 
-## Run From GitHub Packages
+## Run From npm
 
-The published package is `@ivanduplenskikh/cncv`; the executable remains `cncv`. GitHub Packages requires authentication, including for public packages. Add the following to your user-level `.npmrc`, and provide a GitHub PAT classic with `read:packages` through the environment variable (never commit a token):
-
-```ini
-@ivanduplenskikh:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}
-```
+The public npm package is `@ivanduplenskikh/cncv`; the executable remains `cncv`. Installation from npmjs.com does not require authentication. If you previously configured this scope for GitHub Packages, remove that user-level registry override or change it to `https://registry.npmjs.org`.
 
 ```sh
 npx @ivanduplenskikh/cncv@1.0.0 /path/to/project
 pnpm dlx @ivanduplenskikh/cncv@1.0.0 /path/to/project
 ```
 
-Releases publish through GitHub Actions when a GitHub release is published. Its tag must match the package version, for example `v1.0.0`. The workflow runs checks and publishes with its temporary `GITHUB_TOKEN`; no publishing token is stored in this repository. New GitHub packages are private by default; adjust package visibility and access in GitHub as needed.
+## Publishing
+
+Releases publish to npmjs.com through GitHub Actions when a GitHub release is published. Its tag must match the package version, for example `v1.0.0`. The workflow runs checks and uses npm 11 with GitHub OIDC trusted publishing and provenance; no npm token or GitHub Packages permission is required. Provenance requires a public source repository.
+
+For the first publication, sign in with an npm account that owns the `@ivanduplenskikh` scope and publish from this checkout:
+
+```sh
+pnpm install --frozen-lockfile
+npm login --registry=https://registry.npmjs.org
+npm publish --access public
+```
+
+The package's `prepack` script builds and tests it before publishing. npm may require account 2FA verification. Do not put credentials in the repository.
+
+After the package exists, open its settings on npmjs.com and add a GitHub Actions trusted publisher with owner `ivanduplenskikh`, repository `cncv`, and workflow filename `release.yml`. Leave the environment unset unless you also configure one in the workflow. Future releases can then publish without a stored token. Increment the package version before publishing another release: npm versions cannot be overwritten, including the version used for the initial manual publication.
 
 ## Setup
 

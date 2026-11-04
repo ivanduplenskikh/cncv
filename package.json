@@ -1,6 +1,6 @@
 {
   "name": "@ivanduplenskikh/cncv",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Check installed packages for declared Node.js engine compatibility.",
   "type": "module",
   "packageManager": "pnpm@10.20.0",
@@ -9,7 +9,8 @@
     "url": "git+https://github.com/ivanduplenskikh/cncv.git"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "bin": {
     "cncv": "dist/src/cli.js"
@@ -37,13 +38,13 @@
   "dependencies": {
     "cli-table3": "^0.6.5",
     "open": "^10.2.0",
-    "semver": "^7.7.3",
-    "zod": "^4.1.12"
+    "semver": "^7.8.6",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@stylistic/eslint-plugin": "^5.0.0",
-    "@types/node": "^22.19.0",
-    "@types/semver": "^7.7.1",
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@types/node": "^22.20.5",
+    "@types/semver": "^7.8.0",
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "oxlint": "^1.91.0",
     "oxlint-tsgolint": "^7.0.2005",

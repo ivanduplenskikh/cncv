@@ -339,12 +339,14 @@ export interface EngineMinimum {
   version?: string;
   status: 'complete' | 'partial' | 'unknown' | 'conflict';
   details: string;
+  conflicts?: { name: string; version: string; range: string }[];
 }
 
 export function minimumEngines(report: Report): { node: EngineMinimum; npm: EngineMinimum } {
   const dependencies = report.rows.filter((row) => row.kind !== 'project');
   const minimum = (engine: 'node' | 'npm'): EngineMinimum => {
     const ranges: string[] = [];
+    const declarations: { name: string; version: string; range: string }[] = [];
     let unresolved = 0;
 
     for (const row of dependencies) {
@@ -357,6 +359,7 @@ export function minimumEngines(report: Report): { node: EngineMinimum; npm: Engi
       }
 
       ranges.push(range);
+      declarations.push({ name: row.name, version: row.version, range });
     }
 
     if (ranges.length === 0) {
@@ -383,7 +386,27 @@ export function minimumEngines(report: Report): { node: EngineMinimum; npm: Engi
       ranges.every((range) => semver.satisfies(candidate, range)));
 
     if (version === undefined) {
-      return { status: 'conflict', details: 'No version satisfies all declared dependency ranges.' };
+      let remaining = [...candidates];
+      const conflicts: typeof declarations = [];
+
+      for (const declaration of declarations) {
+        const narrowed = remaining.filter((candidate) => semver.satisfies(candidate, declaration.range));
+
+        if (narrowed.length < remaining.length) {
+          conflicts.push(declaration);
+          remaining = narrowed;
+        }
+
+        if (remaining.length === 0) {
+          break;
+        }
+      }
+
+      return {
+        status: 'conflict',
+        details: 'No version satisfies all declared dependency ranges.',
+        conflicts: conflicts.length === 0 ? declarations : conflicts,
+      };
     }
 
     if (version === '0.0.0') {

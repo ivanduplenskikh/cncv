@@ -279,6 +279,38 @@ await test('dependency engine minima respect alternatives, upper bounds, and pre
   assert.equal(minimumEngines({ ...report, rows: [row('22.0.0-beta.1', '*')] }).node.version, '22.0.0-beta.1');
 });
 
+await test('minimum conflicts identify dependency ranges without including the root project', () => {
+  const row = (name: string, engine: string): PackageRow => ({
+    name, version: '1.0.0', engine, npmEngine: engine, kind: 'dependency', status: 'OK', path: name,
+  });
+  const report: Report = {
+    nodeVersion: '24.0.0',
+    exitCode: 0,
+    rows: [{ ...row('project', '<10'), kind: 'project' }, row('unrestricted', '*'),
+      row('modern', '>=22'), row('legacy', '<20')],
+  };
+
+  for (const minimum of Object.values(minimumEngines(report))) {
+    assert.equal(minimum.status, 'conflict');
+    assert.deepEqual(minimum.conflicts, [
+      { name: 'modern', version: '1.0.0', range: '>=22' },
+      { name: 'legacy', version: '1.0.0', range: '<20' },
+    ]);
+  }
+
+  const html = renderHtmlReport(report, '.');
+  assert.match(html, /Conflicting dependency ranges/);
+  assert.match(html, /modern@1.0.0<\/strong>: <code>&gt;=22/);
+  assert.match(html, /legacy@1.0.0<\/strong>: <code>&lt;20/);
+  const impossible = minimumEngines({ ...report, rows: [row('impossible', '>22 <20')] });
+  assert.equal(impossible.node.conflicts?.[0]?.name, 'impossible');
+  const collective = minimumEngines({
+    ...report, rows: [row('first', '^18 || ^20'), row('second', '^20 || ^22'), row('third', '^18 || ^22')],
+  });
+  assert.equal(collective.node.status, 'conflict');
+  assert.equal(collective.node.conflicts?.length, 3);
+});
+
 await test('dependency engine minima disclose incomplete metadata independently for Node and npm', () => {
   const base: PackageRow = {
     name: 'dependency', version: '1.0.0', engine: '>=22', kind: 'dependency', status: 'OK', path: '.',
@@ -433,6 +465,47 @@ await test('HTML escapes package metadata and preserves severity ordering and hi
   assert.ok(html.indexOf('! INCOMPATIBLE') < html.indexOf('! BLOCKED'));
   assert.match(html, /default-src 'none'/);
   assert.match(renderHtmlReport({ nodeVersion: '22.14.0', rows: [makeRow('good', 'OK')], exitCode: 0 }, '.'), /All checked packages are compatible/);
+});
+
+await test('HTML prioritizes actionable results, splits counts, and collapses unknown metadata', () => {
+  const row = (name: string, status: PackageRow['status']): PackageRow => ({
+    name, status, version: '1.0.0', engine: '(not declared)', kind: 'dependency', path: '/project/package.json',
+  });
+  const legacy = row('legacy', 'INCOMPATIBLE');
+  legacy.engine = '<20';
+  legacy.engineIssues = ['engines.node: <20 (incompatible, target 25.9.0)'];
+  legacy.path = 'https://raw.githubusercontent.com/a/b/main/package-lock.json#node_modules%2Flegacy%2Fpackage.json';
+  const report: Report = {
+    nodeVersion: '25.9.0',
+    npmVersion: '11.12.1',
+    exitCode: 2,
+    rows: [
+      { ...row('example-project', 'BLOCKED'), kind: 'project', details: 'Blocked by legacy@1.0.0.' },
+      legacy,
+      row('missing-peer', 'MISSING'), row('unknown-package', 'UNKNOWN'), row('hidden-compatible', 'OK'),
+    ],
+  };
+  const original = JSON.stringify(report);
+  const html = renderHtmlReport(report, 'https://github.com/a/b/tree/main');
+  assert.match(html, /<h1>example-project<\/h1>/);
+  assert.match(html, /Check incomplete/);
+  assert.match(html, /1<\/strong><span>Incompatible/);
+  assert.match(html, /1<\/strong><span>Blocked/);
+  assert.match(html, /1<\/strong><span>Missing/);
+  assert.match(html, /1<\/strong><span>Unknown/);
+  assert.match(html, /not additional engine mismatches/);
+  assert.match(html, /<details class="unknowns"><summary>1 package without Node.js engine declarations/);
+  assert.ok(html.indexOf('aria-label="Actionable results"') < html.indexOf('class="minimums"'));
+  assert.ok(html.indexOf('class="minimums"') < html.indexOf('class="unknowns"'));
+  assert.match(html, /node_modules\/legacy\/package.json<\/a>/);
+  assert.match(html, /<div class="row-heading"><h3>legacy.*! INCOMPATIBLE/);
+  assert.doesNotMatch(html, /<table|<script|hidden-compatible|min-width: 900px/);
+  assert.equal(JSON.stringify(report), original);
+
+  const unsafe = renderHtmlReport({ ...report, rows: [{ ...row('unsafe', 'MISSING'), path: 'javascript:alert(1)' }] }, '.');
+  assert.doesNotMatch(unsafe, /href="javascript:/);
+  const estimate = renderHtmlReport({ ...report, source: 'ESTIMATE: metadata only' }, '.');
+  assert.match(estimate, /<p class="project amber">ESTIMATE:/);
 });
 
 await test('npm engine mismatches affect status, tracing, HTML, and CLI exit codes', async (context) => {

@@ -19,14 +19,20 @@ export function remoteManifestUrl(input: string): URL {
 
   const parts = url.pathname.split('/').filter(Boolean);
 
-  if (url.hostname === 'github.com' && parts[2] === 'blob') {
+  if (url.hostname === 'github.com' && (parts[2] === 'blob' || parts[2] === 'tree')) {
+    const directory = parts[2] === 'tree';
     parts.splice(2, 1);
+
+    if (directory) {
+      parts.push('package.json');
+    }
+
     url.hostname = 'raw.githubusercontent.com';
     url.pathname = `/${parts.join('/')}`;
   }
 
   if (url.hostname !== 'raw.githubusercontent.com' || parts.length < 4 || parts.at(-1) !== 'package.json') {
-    throw new Error('Provide a GitHub blob URL or raw.githubusercontent.com URL ending in package.json.');
+    throw new Error('Provide a GitHub tree directory URL, or a GitHub blob or raw.githubusercontent.com URL ending in package.json.');
   }
 
   url.search = '';

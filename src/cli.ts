@@ -11,7 +11,7 @@ import { inspectRemoteProject } from './remote.js';
 const help = `Usage: cncv [module-path] [options]
 
 Check installed dependency engines against Node.js and npm versions.
-Path: a local project, package.json file, or public GitHub package.json URL.
+Path: a local project, package.json file, or public GitHub manifest/tree URL.
 Remote: uses a sibling npm v2/v3 lockfile, or labeled public npm estimates.
 
 Options:

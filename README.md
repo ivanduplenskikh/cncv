@@ -72,7 +72,7 @@ pnpm start /path/to/project --node 24.0.0 --direct
 pnpm start /path/to/project --include-dev
 ```
 
-The path defaults to the current directory. The target Node.js version defaults to the running version; `--node` requires an exact version, not a range. Public GitHub manifest URLs are also supported.
+The path defaults to the current directory. The target Node.js version defaults to the running version; `--node` requires an exact version, not a range. Public GitHub manifest and `tree` directory URLs are also supported.
 
 ## npm Engine Checks
 
@@ -88,9 +88,10 @@ Pass the URL of a package manifest, including manifests in repository subdirecto
 
 ```sh
 pnpm start "https://github.com/microsoft/azure-pipelines-tasks/blob/master/Tasks/AzureCLIV1/package.json" --node 10.14.0
+pnpm start "https://github.com/microsoft/azure-pipelines-tasks-common-packages/tree/main/common-npm-packages/azure-arm-rest"
 ```
 
-GitHub `blob` links are converted to `raw.githubusercontent.com` links; raw links work directly too. Only public HTTPS GitHub manifest URLs are accepted. For refs containing slashes, use an unambiguous raw URL with the encoded ref or a commit SHA. Repository-root URLs and private authentication are not supported.
+GitHub `blob` links are converted to `raw.githubusercontent.com` links; raw links work directly too. GitHub `tree` links resolve to the directory's `package.json`, including branch-root links such as `/tree/main`. Only public HTTPS GitHub manifest or `tree` directory URLs are accepted. For refs containing slashes, use an unambiguous raw manifest URL with the encoded ref or a commit SHA. Bare repository URLs and private authentication are not supported.
 
 The checker first fetches a sibling npm package-lock.json:
 

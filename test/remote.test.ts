@@ -18,6 +18,20 @@ await test('converts nested GitHub blob URLs and accepts raw URLs', () => {
   }
 });
 
+await test('converts GitHub tree directories to package manifest URLs', () => {
+  const directory = 'https://github.com/microsoft/azure-pipelines-tasks-common-packages/tree/main/common-npm-packages/azure-arm-rest';
+  const manifest = 'https://raw.githubusercontent.com/microsoft/azure-pipelines-tasks-common-packages/main/common-npm-packages/azure-arm-rest/package.json';
+  assert.equal(remoteManifestUrl(directory).href, manifest);
+  assert.equal(remoteManifestUrl(`${directory}/?x=1#test`).href, manifest);
+  assert.equal(remoteManifestUrl('https://github.com/a/b/tree/main').href,
+    'https://raw.githubusercontent.com/a/b/main/package.json');
+
+  for (const url of ['https://github.com/a/b/tree', 'https://github.com/a/b/blob/main/README.md',
+    'https://raw.githubusercontent.com/a/b/main/directory', 'https://example.com/a/b/tree/main']) {
+    assert.throws(() => remoteManifestUrl(url));
+  }
+});
+
 await test('remote locked dependencies reuse tracing, exclude dev packages, and preserve nested versions', async () => {
   const manifest = { name: 'project', dependencies: { parent: '*', shared: '*' }, devDependencies: { dev: '*' } };
   const lock = {

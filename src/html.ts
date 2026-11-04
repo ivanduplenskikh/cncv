@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { appendFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 
 import open from 'open';
 
@@ -32,7 +34,13 @@ function renderSource(location: string, label?: string): string {
   return escapeHtml(location);
 }
 
-function reportIdentity(projectPath: string, report?: Report): { name: string; slug: string; id: string } {
+function safeReportName(name: string): string {
+  const slug = name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').slice(0, 80).replace(/^-+|-+$/g, '') || 'project';
+
+  return /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(slug) ? `project-${slug}` : slug;
+}
+
+function reportIdentity(projectPath: string, report?: Report): { name: string; slug: string; folder: string; id: string; key: string } {
   const remote = /^https?:\/\//i.test(projectPath);
   let target = remote ? remoteManifestUrl(projectPath).href : path.resolve(projectPath);
 
@@ -45,12 +53,12 @@ function reportIdentity(projectPath: string, report?: Report): { name: string; s
   const rootName = report?.rows.find((row) => row.kind === 'project')?.name;
   const name = rootName !== undefined && rootName !== '(project)' && rootName.trim() !== ''
     ? rootName : fallback || 'project';
-  const sanitized = name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').slice(0, 80).replace(/^-+|-+$/g, '') || 'project';
-  const slug = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(sanitized) ? `project-${sanitized}` : sanitized;
+  const slug = safeReportName(name);
+  const folder = safeReportName((remote ? parts[1] : path.basename(target)) || 'project');
   const key = !remote && process.platform === 'win32' ? target.toLowerCase() : target;
   const id = createHash('sha256').update(key).digest('hex').slice(0, 16);
 
-  return { name, slug, id };
+  return { name, slug, folder, id, key };
 }
 
 export function renderHtmlReport(report: Report, projectPath: string): string {
@@ -180,6 +188,76 @@ async function launchBrowser(filePath: string): Promise<void> {
   await open(filePath);
 }
 
+let reportWrites = Promise.resolve();
+
+async function historyProject(filePath: string): Promise<string> {
+  const stream = createReadStream(filePath, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+
+  try {
+    for await (const line of lines) {
+      const entry: unknown = JSON.parse(line);
+
+      if (typeof entry === 'object' && entry !== null && 'projectPath' in entry && typeof entry.projectPath === 'string') {
+        return entry.projectPath;
+      }
+
+      break;
+    }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+
+  throw new Error(`Invalid report history: ${filePath}`);
+}
+
+function saveHtmlReport(report: Report, projectPath: string, destination?: string): Promise<string> {
+  const write = reportWrites.then(async () => {
+    const { folder, id, key } = reportIdentity(projectPath, report);
+    const root = path.join(os.homedir(), '.cncv', 'reports');
+    const directories = destination === undefined
+      ? [path.join(root, folder), path.join(root, `${folder}-${id}`)] : [destination];
+    const entry = `${JSON.stringify({ projectPath: key, createdAt: new Date().toISOString(), report })}\n`;
+
+    for (const directory of directories) {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const historyPath = path.join(directory, 'history.jsonl');
+
+      try {
+        await writeFile(historyPath, entry, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      } catch (error) {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') {
+          throw error;
+        }
+
+        if (await historyProject(historyPath) !== key) {
+          continue;
+        }
+
+        await appendFile(historyPath, entry, { encoding: 'utf8', mode: 0o600 });
+      }
+
+      const filePath = path.join(directory, 'project.html');
+      const temporary = path.join(directory, `${randomUUID()}.tmp`);
+
+      try {
+        await writeFile(temporary, renderHtmlReport(report, projectPath), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        await rename(temporary, filePath);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+
+      return filePath;
+    }
+
+    throw new Error('Report directory belongs to a different project.');
+  });
+  reportWrites = write.then(() => undefined, () => undefined);
+
+  return write;
+}
+
 export async function startHtmlReportServer(
   projectPath: string,
   regenerate: () => Promise<Report>,
@@ -258,16 +336,17 @@ export async function openHtmlReport(
   launch: (filePath: string) => Promise<void> = launchBrowser,
   regenerate?: () => Promise<Report>,
 ): Promise<{ filePath: string; url?: string; close?: () => Promise<void>; warning?: string }> {
-  const { slug, id } = reportIdentity(projectPath, report);
-  const directory = path.join(os.homedir(), '.cncv', 'reports', `${slug}-${id}`);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const filePath = path.join(directory, `${slug}.html`);
-  await writeFile(filePath, renderHtmlReport(report, projectPath), { encoding: 'utf8', mode: 0o600 });
+  const filePath = await saveHtmlReport(report, projectPath);
   let live: Awaited<ReturnType<typeof startHtmlReportServer>> | undefined;
 
   try {
     if (regenerate !== undefined) {
-      live = await startHtmlReportServer(projectPath, regenerate, report);
+      live = await startHtmlReportServer(projectPath, async () => {
+        const updated = await regenerate();
+        await saveHtmlReport(updated, projectPath, path.dirname(filePath));
+
+        return updated;
+      }, report);
     }
 
     await launch(live?.url ?? filePath);

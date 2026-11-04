@@ -59,7 +59,7 @@ Remote checks download metadata only, not packages. Malformed lockfiles, workspa
 
 By default, cncv prints a terminal report and opens a live HTML report. Refreshing the page reruns the check with the same targets and flags. Keep the CLI running; Ctrl+C stops the server. Terminal output and exit codes reflect the initial check.
 
-A static snapshot is saved under `~/.cncv/reports/<project-name>-<path-hash>/`. Rechecking the same project overwrites it; the CLI prints both URLs. Reports use no external assets or browser scripts.
+A permanent snapshot is saved as `~/.cncv/reports/<repo-name>/project.html`. Each check and successful browser refresh updates it and appends a timestamped full report to `history.jsonl` in the same folder (one JSON object per line). Local folders use the checked directory name; GitHub URLs use the repository name. A path-hash suffix is added only when different projects share a folder name. The live URL still includes a random token; the CLI prints both URLs. Reports use no external assets or browser scripts. Older report folders are left untouched.
 
 HTML puts actionable results first, separates status counts, and collapses unknown packages and metadata details. Compatible packages are hidden but included in summary counts.
 

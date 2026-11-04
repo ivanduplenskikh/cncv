@@ -1,6 +1,6 @@
 {
   "name": "cncv",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Check installed packages for declared Node.js engine compatibility.",
   "type": "module",
   "packageManager": "pnpm@10.20.0",

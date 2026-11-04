@@ -39,6 +39,16 @@ Replace `<stage-id>` with the candidate's ID from the workflow output or stage l
 
 Increment the package version before staging another release: an existing staged or published version cannot be overwritten. Rerunning a successful staging job for the same version will therefore fail; review the existing candidate instead. Workflow changes must be included in the release tag's commit. Rerunning an older failed run still uses its original workflow, not a later edit on the default branch.
 
+### GitHub Packages
+
+GitHub Packages publishing is available separately through the manual **Publish GitHub Package** workflow. After pushing the workflow to the default branch, run it from GitHub Actions or with:
+
+```sh
+gh workflow run github-packages.yml --ref main
+```
+
+The workflow installs dependencies, runs checks, and publishes the selected ref's package version to `https://npm.pkg.github.com` using its temporary `GITHUB_TOKEN` with `packages: write`. It overrides both npm registry settings only in the CI checkout; npmjs.org staging remains unchanged. Use a new version for each publication, since existing versions cannot be overwritten. Downloading from GitHub Packages requires authentication, even for public packages.
+
 ## Setup
 
 Requires Node.js 22.13+ and pnpm 10.20.0.

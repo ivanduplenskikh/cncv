@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -111,6 +111,51 @@ await test('dev dependencies are omitted by default and can be explicitly includ
   const conflict = spawnSync(process.execPath, [...cliArgs, directory, '--include-dev', '--omit-dev'], { encoding: 'utf8' });
   assert.equal(conflict.status, 2);
   assert.match(conflict.stderr, /Cannot combine/);
+});
+
+await test('CI mode exits with check status and creates no HTML reports', async (context) => {
+  const cases = [
+    { manifest: { name: 'compatible', engines: { node: '>=22' } }, status: 0 },
+    { manifest: { name: 'incompatible', engines: { node: '<22' } }, status: 1 },
+    { manifest: { name: 'incomplete', dependencies: { missing: '*' } }, status: 2 },
+  ];
+
+  for (const { manifest, status } of cases) {
+    const directory = await fixture(context, manifest);
+    const result = spawnSync(process.execPath, [cli, directory, '--ci', '--no-color', '--node', '22.14.0', '--npm', '10.9.2'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: { ...process.env, HOME: directory, USERPROFILE: directory },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, status, result.stderr);
+    assert.match(result.stdout, /Node.js target: 22.14.0/);
+    assert.equal(stripVTControlCharacters(result.stdout), result.stdout);
+    assert.doesNotMatch(result.stdout, /[\u2500-\u257f]| +\n/u);
+    assert.match(result.stdout, /MINIMUM DEPENDENCY VERSIONS\nMinimum Node.js/);
+    assert.doesNotMatch(result.stdout, /HTML report|HTML snapshot|report server/);
+    assert.deepEqual(await readdir(directory), ['package.json']);
+  }
+});
+
+await test('CI colors default on and can be disabled by flag or NO_COLOR', async (context) => {
+  const directory = await fixture(context, { name: 'incompatible', engines: { node: '<22' } });
+  const env: NodeJS.ProcessEnv = { ...process.env, TERM: 'dumb' };
+  delete env['NO_COLOR'];
+  const args = [cli, directory, '--ci', '--node', '22.14.0', '--npm', '10.9.2'];
+  const colored = spawnSync(process.execPath, args, { encoding: 'utf8', env });
+  assert.equal(colored.status, 1, colored.stderr);
+  assert.notEqual(stripVTControlCharacters(colored.stdout), colored.stdout);
+  assert.ok(colored.stdout.includes('\u001b[36m'));
+  assert.ok(colored.stdout.includes('\u001b[31m'));
+
+  for (const result of [
+    spawnSync(process.execPath, [...args, '--no-color'], { encoding: 'utf8', env }),
+    spawnSync(process.execPath, args, { encoding: 'utf8', env: { ...env, NO_COLOR: '1' } }),
+  ]) {
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, stripVTControlCharacters(colored.stdout));
+  }
 });
 
 await test('missing packages and invalid engines make the check incomplete', async (context) => {
@@ -427,7 +472,7 @@ await test('minimum information blocks are highlighted, responsive, and bounded 
     assert.equal(stripVTControlCharacters(colored), plain);
     const lines = plain.split('\n').filter((line) => /^[\u2500-\u257f]/u.test(line));
     assert.ok(lines.length > 3);
-    assert.ok(lines.every((line) => line.length <= columns));
+    assert.ok(lines.every((line) => line.length === columns));
   }
 
   const html = renderHtmlReport(report, '.');
@@ -435,6 +480,67 @@ await test('minimum information blocks are highlighted, responsive, and bounded 
   assert.equal((html.match(/class="minimum-item" data-status="unknown"/g) ?? []).length, 2);
   assert.match(html, /class="minimum-value"/);
   assert.match(html, /\.minimum-values \{ grid-template-columns: minmax\(0, 1fr\)/);
+});
+
+await test('plain reports retain package evidence without table formatting', () => {
+  const report: Report = {
+    nodeVersion: '25.9.0',
+    npmVersion: '11.12.1',
+    exitCode: 1,
+    source: 'Remote npm lockfile',
+    rows: [
+      { name: 'compatible', version: '1.0.0', engine: '>=18', kind: 'dependency', status: 'OK', path: '.' },
+      {
+        name: 'blocked',
+        version: '2.0.0',
+        engine: '(not declared)',
+        npmEngine: '<11',
+        npmStatus: 'INCOMPATIBLE',
+        kind: 'dependency',
+        status: 'BLOCKED',
+        path: '.',
+        engineIssues: ['npm target excluded'],
+        details: 'Dependency\nrequires another version.',
+      },
+    ],
+  };
+  const output = renderReport(report, { format: 'plain', columns: 64 });
+  assert.equal(output, renderReport(report, { format: 'plain', columns: 140 }));
+  const colored = renderReport(report, { format: 'plain', color: true, columns: 64 });
+  assert.notEqual(colored, output);
+  assert.equal(stripVTControlCharacters(colored), output);
+  assert.equal(stripVTControlCharacters(output), output);
+  assert.doesNotMatch(output, /[\u2500-\u257f]| +\n/u);
+  assert.match(output, /Remote npm lockfile/);
+  assert.match(output, /BLOCKED: blocked@2.0.0 \(dependency\)\n {2}Node engine: \(not declared\)/);
+  assert.match(output, /npm engine: <11 \(INCOMPATIBLE\)/);
+  assert.match(output, /npm target excluded\n {2}Dependency requires another version\./);
+  assert.match(output, /1 blocked, 1 compatible \(hidden\)$/);
+});
+
+await test('full-width detail rows align with table borders', () => {
+  const report: Report = {
+    nodeVersion: '25.9.0',
+    npmVersion: '11.12.1',
+    exitCode: 0,
+    rows: [{
+      name: 'emoji-regex',
+      version: '8.0.0',
+      engine: '(not declared)',
+      kind: 'dependency',
+      status: 'UNKNOWN',
+      path: '.',
+      details: 'No dependencies to inspect; package compatibility remains unknown.',
+    }],
+  };
+
+  for (const columns of [64, 80, 100, 140]) {
+    for (const color of [false, true]) {
+      const output = stripVTControlCharacters(renderReport(report, { columns, color }));
+      const lines = output.split('\n').filter((line) => /^[\u2500-\u257f]/u.test(line));
+      assert.ok(lines.every((line) => line.length === columns), output);
+    }
+  }
 });
 
 await test('table wraps long cells, sorts by severity and name, and highlights incompatibilities', () => {

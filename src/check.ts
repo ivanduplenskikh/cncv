@@ -333,6 +333,7 @@ export async function inspectProject(inputPath = '.', options: CheckOptions = {}
 export interface RenderOptions {
   color?: boolean;
   columns?: number;
+  format?: 'table' | 'plain';
 }
 
 export interface EngineMinimum {
@@ -447,6 +448,41 @@ export function visibleReportRows(report: Report): PackageRow[] {
 export function renderReport(report: Report, options: RenderOptions = {}): string {
   const priority: Record<Status, number> = { INCOMPATIBLE: 0, BLOCKED: 1, ERROR: 2, INVALID: 3, MISSING: 4, UNKNOWN: 5, OK: 6 };
   const visibleRows = visibleReportRows(report);
+  const clean = (value: string): string => value.replace(/\p{Cc}/gu, ' ');
+  const counts = new Map<Status, number>();
+
+  for (const row of report.rows) {
+    counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
+  }
+
+  const summary = [...counts].sort(([left], [right]) => priority[left] - priority[right])
+    .map(([status, count]) => `${String(count)} ${status === 'OK' ? 'compatible (hidden)' : status.toLowerCase()}`).join(', ');
+
+  if (options.format === 'plain') {
+    return [
+      `Node.js target: ${report.nodeVersion}`,
+      ...(report.npmVersion === undefined ? [] : [`npm target: ${report.npmVersion}`]),
+      ...(report.source === undefined ? [] : [clean(report.source)]),
+      '',
+      options.color === true ? styleText(['bold', 'cyan'], 'MINIMUM DEPENDENCY VERSIONS', { validateStream: false }) : 'MINIMUM DEPENDENCY VERSIONS',
+      ...renderEngineMinimums(report),
+      'Dependency declarations only; current project entry excluded. Upper bounds still apply.',
+      '',
+      ...visibleRows.flatMap((row) => [
+        options.color === true
+          ? styleText(row.status === 'INCOMPATIBLE' || row.status === 'BLOCKED' ? ['bold', 'red'] : 'yellow',
+            clean(`${row.status}: ${row.name}@${row.version} (${row.kind})`), { validateStream: false })
+          : clean(`${row.status}: ${row.name}@${row.version} (${row.kind})`),
+        `  Node engine: ${clean(row.engine)}`,
+        ...(row.npmEngine === undefined ? [] : [`  npm engine: ${clean(row.npmEngine)} (${row.npmStatus ?? 'UNKNOWN'})`]),
+        ...(row.engineIssues === undefined || row.engineIssues.length === 0 ? [] : [`  ${clean(row.engineIssues.join('; '))}`]),
+        ...(row.details === undefined ? [] : [`  ${clean(row.details)}`]),
+        '',
+      ]),
+      visibleRows.length === 0 ? `All checked packages are compatible (${String(report.rows.length)} checked).` : summary,
+    ].join('\n');
+  }
+
   const width = Math.max(64, Math.min(options.columns ?? 100, 140));
   const minimumTitle = 'MINIMUM DEPENDENCY VERSIONS';
   const minimumBlock = new Table({
@@ -468,7 +504,6 @@ export function renderReport(report: Report, options: RenderOptions = {}): strin
       `All checked packages are compatible (${String(report.rows.length)} checked).`].join('\n');
   }
 
-  const clean = (value: string): string => value.replace(/\p{Cc}/gu, ' ');
   const packageWidth = Math.floor((width - 45) * 0.55);
   const engineWidth = width - 45 - packageWidth;
   const table = new Table({
@@ -509,15 +544,8 @@ export function renderReport(report: Report, options: RenderOptions = {}): strin
     }
   }
 
-  const counts = new Map<Status, number>();
-
-  for (const row of report.rows) {
-    counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
-  }
-
   return [
     `Node.js target: ${report.nodeVersion}`, ...(report.npmVersion === undefined ? [] : [`npm target: ${report.npmVersion}`]), ...(report.source === undefined ? [] : [report.source]), ...minimumLines, '', table.toString(), '',
-    [...counts].sort(([left], [right]) => priority[left] - priority[right])
-      .map(([status, count]) => `${String(count)} ${status === 'OK' ? 'compatible (hidden)' : status.toLowerCase()}`).join(', '),
+    summary,
   ].join('\n');
 }

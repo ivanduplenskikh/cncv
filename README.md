@@ -32,6 +32,8 @@ For local checks, install the target project's dependencies first. The path defa
 | `--include-dev` | Include the project's dev dependencies. |
 | `--omit-dev` | Explicitly exclude dev dependencies; conflicts with `--include-dev`. |
 | `--no-open` | Terminal-only output; no HTML files, browser, or server. |
+| `--ci` | CI mode: unboxed, line-based text with colors by default and no alignment padding; no HTML files, browser, or server. |
+| `--no-color` | Disable ANSI colors in any mode; the `NO_COLOR` environment variable also disables them. |
 | `--help`, `-h` | Show help. |
 
 Node and npm targets are independent; selecting a Node version does not select or validate a matching npm release.
@@ -41,6 +43,43 @@ pnpm start . --node 18 --no-open
 ```
 
 A major target (also accepted as `v18`) uses the official Node.js release index, shared across projects and majors in `~/.cncv/cache/node-releases.json`. The index is cached for 24 hours, then revalidated on the next lookup using HTTP validators when available. If a refresh fails, cncv warns, uses the last valid index, and waits another 24 hours before retrying. The first lookup needs network access. The report shows the resolved exact version; HTML refreshes keep that target. Exact targets such as `18.20.8` bypass both cache and network for offline or reproducible checks. Minor-only targets and ranges are not accepted.
+
+## CI Pipelines
+
+Use `--ci` in Azure Pipelines, GitLab CI, GitHub Actions, or any other runner. It is explicitly enabled, not detected from environment variables. The command prints an unboxed, line-based report with ANSI colors by default, without table borders or alignment padding, then exits: `0` for no declared incompatibilities, `1` for incompatibilities, and `2` for errors or incomplete checks. Unknown declarations do not fail the job. Interactive runs retain the table layout.
+
+For log viewers that do not support ANSI colors, use `cncv . --ci --no-color` or set `NO_COLOR`. Colors only style existing text and do not change line wrapping or alignment.
+
+Install the target project's dependencies before checking. These examples assume an npm project with a committed lockfile; replace `npm ci` with your project's install command as needed. Dev dependencies remain excluded from checks unless you add `--include-dev`. Use exact `--node` and `--npm` versions to check fixed targets instead of the runner's installed versions.
+
+Before running these steps, configure the runner's user-level `.npmrc` as shown in Quick Start and supply `GITHUB_PACKAGES_TOKEN` through your CI secret store. Azure Pipelines must explicitly map the secret into the script's environment; GitLab can use a masked CI/CD variable. Never commit the token.
+
+### Azure Pipelines
+
+```yaml
+pool:
+	vmImage: ubuntu-latest
+steps:
+	- task: NodeTool@0
+		inputs:
+			versionSpec: '22.x'
+	- script: |
+			npm ci
+			npx --yes @ivanduplenskikh/cncv . --ci
+		displayName: Check dependency engines
+		env:
+			GITHUB_PACKAGES_TOKEN: $(GITHUB_PACKAGES_TOKEN)
+```
+
+### GitLab CI
+
+```yaml
+check-engines:
+	image: node:22
+	script:
+		- npm ci
+		- npx --yes @ivanduplenskikh/cncv . --ci
+```
 
 ## GitHub Projects
 

@@ -21,6 +21,8 @@ Options:
   --omit-dev        Exclude the project's devDependencies (default)
   --include-dev     Include the project's devDependencies
   --no-open         Terminal only; do not generate HTML or start a server
+  --ci              CI mode: unboxed text, no HTML, browser, or server
+  --no-color        Disable ANSI colors (also respects NO_COLOR)
   --help, -h        Show help
 
 Exit codes: 0 = no declared incompatibilities, 1 = incompatible,
@@ -41,6 +43,8 @@ try {
       'omit-dev': { type: 'boolean' },
       'include-dev': { type: 'boolean' },
       'no-open': { type: 'boolean' },
+      ci: { type: 'boolean' },
+      'no-color': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -70,12 +74,14 @@ try {
     const remote = /^https?:\/\//i.test(input);
     const report = remote ? await inspectRemoteProject(input, options) : await inspectProject(input, options);
     console.log(renderReport(report, {
-      color: process.stdout.isTTY && !('NO_COLOR' in process.env) && process.env['TERM'] !== 'dumb',
+      format: values.ci === true ? 'plain' : 'table',
+      color: values['no-color'] !== true && !('NO_COLOR' in process.env)
+        && (values.ci === true || (process.stdout.isTTY && process.env['TERM'] !== 'dumb')),
       columns: process.stdout.columns || 100,
     }));
     process.exitCode = report.exitCode;
 
-    if (values['no-open'] !== true) {
+    if (values['no-open'] !== true && values.ci !== true) {
       const projectPath = remote ? input : path.resolve(input);
       const refreshOptions: CheckOptions = { ...options, nodeVersion: report.nodeVersion };
 
